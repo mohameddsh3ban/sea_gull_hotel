@@ -1,0 +1,100 @@
+{
+  "pick_restaurant": "Izaberite restoran",
+  "welcome_sub": "Uživajte u svetskim kuhinjama uz pogled na more.",
+  "reserve_now": "Rezerviši sada",
+  "book_table": "Rezervišite sto",
+  "restaurant_menu": "Meni restorana",
+  "cant_see_menu": "Ne možete da vidite meni?",
+  "click_here": "Kliknite ovde da ga otvorite",
+  "extra_charge": "Uz doplatu",
+  "select_date": "Izaberite datum",
+  "time_fixed": "Vreme: 19:00 - 20:00",
+  "number_of_guests": "Broj gostiju",
+  "room_number": "Broj sobe (obavezno)",
+  "your_name": "Vaše ime (neobavezno)",
+  "email": "Email adresa",
+  "confirm_reservation": "Potvrdite rezervaciju",
+  "sending": "Slanje...",
+  "room_required": "Broj sobe je obavezan.",
+  "reservation_error": "Došlo je do problema. Pokušajte ponovo.",
+  "home": "Početna",
+  "about": "O nama",
+  "contact": "Kontakt",
+  "hotelName": "Seagull Beach Resort",
+  "seafood_desc": "Što svežije to bolje",
+  "chinese_desc": "Iskusite kinesku kuhinju",
+  "italian_desc": "Italijanska kuhinja je pravi izbor!",
+  "indian_desc": "Začini i više.",
+  "seafood_name": "Morski plodovi",
+  "chinese_name": "Kineska",
+  "italian_name": "Italijanska",
+  "indian_name": "Indijska",
+  "seats_left": "Preostalo mesta: {{count}}",
+  "welcome_message": "Dobrodošli u naše à la carte restorane",
+  "Button": "Rezerviši sada",
+  "menu_button": "Prikaži PDF",
+  "first_name": "Име",
+  "last_name": "презиме",
+  "select_main_course": "Изаберите главно јело",
+  "chicken": "Пилетина",
+  "meat": "Месо",
+  "quatro_formagi": "Quatro Formadži",
+  "chicken_pizza": "Pica sa piletinom",
+  "petto_chicken": "Petto di Pollo (pileća prsa)",
+  "comments_placeholder": "Коментар",
+  "fish_reservation_heading": "Za rezervacije ribljeg restorana",
+  "fish_reservation_subtext": "Kontaktirajte tim Food Court-a između 8:00 i 10:00",
+  "add_sushi": "Dodaj suši",
+  "choose_sushi": "Izaberi svoj suši",
+  "total_price": "Ukupno",
+  "sushi_categories": {
+    "hot_rolls": "Topli rolnici (6 komada)",
+    "maki_rolls": "Maki rolnici (6 komada)"
+  },
+  "sushi_items": {
+    "Hot Dynamites": {
+      "title": "Hot Dynamites",
+      "description": "Losos, Philadelphia sir, avokado, ljuti majonez"
+    },
+    "Hot Crab": {
+      "title": "Hot Crab",
+      "description": "Rak, losos, avokado, japanski majonez"
+    },
+    "Hot Dragon": {
+      "title": "Hot Dragon",
+      "description": "Losos, škampi, Philadelphia sir, avokado"
+    },
+    "Sake Maki": {
+      "title": "Sake Maki",
+      "description": "Losos, ljuti majonez"
+    },
+    "Seagull Roll": {
+      "title": "Seagull Roll",
+      "description": "Prženi škampi, terijaki sos"
+    },
+    "Kappa Roll": {
+      "title": "Kappa Roll",
+      "description": "Krastavac, susam"
+    },
+    "Kabi Maki": {
+      "title": "Kabi Maki",
+      "description": "Kuvani škampi, avokado, ljuti majonez"
+    }
+  },
+  "confirmation": {
+    "title": "Резервација потврђена!",
+    "message": "Хвала што сте резервисали код нас. Радујемо се вашем доласку.",
+    "backHome": "Повратак на почетну"
+  },
+  "recommendations": {
+    "heading": "Можда ће вам се свидети:"
+  },
+  "cabanas": {
+    "title": "Private Beach Cabanas",
+    "description": "🎉 Прославите свој посебан дан са нама! 🌴 Било да су у питању рођендан или медени месец, учините га незаборавним у нашој плажној кабани – где се Црвено море сусреће са радосним успоменама.",
+    "notice": "За резервацију кабане, молимо посетите рецепцију.",
+    "imageAlt": "Приватна плажна кабана поред океана"
+  },
+  "extra_charge_notice": "Напомена: Плаћање за вашу наруџбину сушија мора бити извршено на рецепцији до 13:00 часова на дан резервације. Уколико уплата не буде примљена до тада, наруџбина ће бити отказана.",
+  "selected_sushi": "Izabrani suši"
+}

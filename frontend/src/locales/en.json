@@ -1,0 +1,100 @@
+{
+  "pick_restaurant": "Pick a Restaurant",
+  "welcome_sub": "World cuisines with a view by the sea.",
+  "reserve_now": "Reserve now",
+  "book_table": "Book Your Table",
+  "extra_charge": "Extra charge",
+  "restaurant_menu": "Restaurant Menu",
+  "cant_see_menu": "Can’t see the menu?",
+  "click_here": "Click here to open it",
+  "select_date": "Select a date",
+  "time_fixed": "Time: 19:00 - 20:00",
+  "number_of_guests": "Number of Guests",
+  "room_number": "Room Number (Required)",
+  "your_name": "Your Name (Optional)",
+  "email": "Email Address",
+  "confirm_reservation": "Confirm Reservation",
+  "sending": "Sending...",
+  "room_required": "Room number is required.",
+  "reservation_error": "There was a problem. Please try again.",
+  "home": "Home",
+  "about": "About",
+  "contact": "Contact",
+  "hotelName": "Seagull Beach Resort",
+  "seafood_desc": "The Fresher the better",
+  "chinese_desc": "Experience the chinese cuisine",
+  "italian_desc": "Italian Is The Way!",
+  "indian_desc": "Spices and more.",
+  "seafood_name": "Seafood",
+  "chinese_name": "Chinese",
+  "italian_name": "Italian",
+  "indian_name": "Indian",
+  "seats_left": "{{count}} seats remaining",
+  "welcome_message": "Welcome To Our à la Carte Restaurants",
+  "Button": "Reserve Now",
+  "menu_button": "View PDF",
+  "first_name": "First Name",
+  "last_name": "Last Name",
+  "select_main_course": "Select Main Course",
+  "chicken": "Chicken",
+  "meat": "Meat",
+  "comments_placeholder": "Comment",
+  "fish_reservation_heading": "For Fish Restaurant Reservations",
+  "fish_reservation_subtext": "Contact Food Court Team Between 8:00 - 10:00",
+  "add_sushi": "Add Sushi",
+  "choose_sushi": "Choose Your Sushi",
+  "total_price": "Total",
+  "quatro_formagi": "Quattro Formaggi",
+  "chicken_pizza": "Chicken Pizza",
+  "petto_chicken": "Petto di Pollo (Chicken Breast)",
+  "sushi_categories": {
+    "hot_rolls": "Hot Rolls (6 pieces)",
+    "maki_rolls": "Maki Rolls (6 pieces)"
+  },
+  "sushi_items": {
+    "Hot Dynamites": {
+      "title": "Hot Dynamites",
+      "description": "Salmon, Philadelphia cheese, avocado, spicy mayo"
+    },
+    "Hot Crab": {
+      "title": "Hot Crab",
+      "description": "Crab, salmon, avocado, Japanese mayo"
+    },
+    "Hot Dragon": {
+      "title": "Hot Dragon",
+      "description": "Salmon, shrimps, Philadelphia cheese, avocado"
+    },
+    "Sake Maki": {
+      "title": "Sake Maki",
+      "description": "Salmon, spicy mayonnaise"
+    },
+    "Seagull Roll": {
+      "title": "Seagull Roll",
+      "description": "Fried shrimps, teriyaki sauce"
+    },
+    "Kappa Roll": {
+      "title": "Kappa Roll",
+      "description": "Cucumber, sesame seeds"
+    },
+    "Kabi Maki": {
+      "title": "Kabi Maki",
+      "description": "Boiled shrimps, avocado, spicy mayonnaise"
+    }
+  },
+  "confirmation": {
+    "title": "Reservation Confirmed!",
+    "message": "Thank you for booking with us. We look forward to hosting you.",
+    "backHome": "Back to Home"
+  },
+  "recommendations": {
+    "heading": "You might also like:"
+  },
+  "cabanas": {
+    "title": "Private Beach Cabanas",
+    "description": "🎉 Celebrate Your Special Day With Us! 🌴 Whether it's your birthday or honeymoon, make it unforgettable at our Beach Cabana – where the Red Sea meets joyful memories.",
+    "notice": "To book your cabana, please visit the reception.",
+    "imageAlt": "Private beach cabana by the ocean"
+  },
+  "extra_charge_notice": "Please note: Payment for your sushi order must be made at the reception by 1:00 PM on the day of your reservation. If payment is not received by this time, the order will be cancelled.",
+  "selected_sushi": "Selected Sushi"
+}

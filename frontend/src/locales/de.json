@@ -1,0 +1,100 @@
+{
+  "pick_restaurant": "Wähle ein Restaurant",
+  "welcome_sub": "Genießen Sie internationale Küche mit Blick aufs Meer.",
+  "reserve_now": "Jetzt reservieren",
+  "extra_charge": "Aufpreis",
+  "book_table": "Reserviere deinen Tisch",
+  "restaurant_menu": "Restaurantmenü",
+  "cant_see_menu": "Kannst du das Menü nicht sehen?",
+  "click_here": "Hier klicken, um es zu öffnen",
+  "select_date": "Datum auswählen",
+  "time_fixed": "Uhrzeit: 19:00 - 20:00",
+  "number_of_guests": "Anzahl der Gäste",
+  "room_number": "Zimmernummer (erforderlich)",
+  "your_name": "Ihr Name (optional)",
+  "email": "E-Mail-Adresse",
+  "confirm_reservation": "Reservierung bestätigen",
+  "sending": "Wird gesendet...",
+  "room_required": "Zimmernummer ist erforderlich.",
+  "reservation_error": "Es gab ein Problem. Bitte versuche es erneut.",
+  "home": "Startseite",
+  "about": "Über uns",
+  "contact": "Kontakt",
+  "hotelName": "Seagull Beach Resort",
+  "seafood_desc": "So frisch wie es nur geht",
+  "chinese_desc": "Erleben Sie die chinesische Küche vom Feinsten",
+  "italian_desc": "Italienisches Lebensgefühl pur!",
+  "indian_desc": "Gewürze und mehr.",
+  "seafood_name": "Meeresfrüchte",
+  "chinese_name": "Chinesisch",
+  "italian_name": "Italienisch",
+  "indian_name": "Indisch",
+  "seats_left": "{{count}} Plätze verfügbar",
+  "welcome_message": "Willkommen in unseren À-la-carte-Restaurants",
+  "Button": "Reservieren",
+  "menu_button": "PDF anzeigen",
+  "first_name": "Vorname",
+  "last_name": "Nachname",
+  "select_main_course": "Hauptgericht auswählen",
+  "chicken": "Huhn",
+  "meat": "Fleisch",
+  "comments_placeholder": "Kommentar",
+  "fish_reservation_heading": "Für Reservierungen im Fischrestaurant",
+  "fish_reservation_subtext": "Kontaktieren Sie das Food Court Team zwischen 8:00 und 10:00 Uhr",
+  "add_sushi": "Sushi hinzufügen",
+  "choose_sushi": "Wähle dein Sushi",
+  "total_price": "Gesamtbetrag",
+  "quatro_formagi": "Quattro Formaggi",
+  "chicken_pizza": "Hähnchenpizza",
+  "petto_chicken": "Petto di Pollo (Hähnchenbrust)",
+  "sushi_categories": {
+    "hot_rolls": "Heiße Rollen (6 Stück)",
+    "maki_rolls": "Maki Rollen (6 Stück)"
+  },
+  "sushi_items": {
+    "Hot Dynamites": {
+      "title": "Hot Dynamites",
+      "description": "Lachs, Frischkäse, Avocado, scharfe Mayonnaise"
+    },
+    "Hot Crab": {
+      "title": "Hot Crab",
+      "description": "Krabbenfleisch, Lachs, Avocado, japanische Mayonnaise"
+    },
+    "Hot Dragon": {
+      "title": "Hot Dragon",
+      "description": "Lachs, Garnelen, Frischkäse, Avocado"
+    },
+    "Sake Maki": {
+      "title": "Sake Maki",
+      "description": "Lachs, scharfe Mayonnaise"
+    },
+    "Seagull Roll": {
+      "title": "Seagull Roll",
+      "description": "Frittierte Garnelen, Teriyaki-Sauce"
+    },
+    "Kappa Roll": {
+      "title": "Kappa Roll",
+      "description": "Gurke, Sesam"
+    },
+    "Kabi Maki": {
+      "title": "Kabi Maki",
+      "description": "Gekochte Garnelen, Avocado, scharfe Mayonnaise"
+    }
+  },
+  "confirmation": {
+    "title": "Reservierung bestätigt!",
+    "message": "Vielen Dank für Ihre Buchung. Wir freuen uns, Sie bei uns begrüßen zu dürfen.",
+    "backHome": "Zur Startseite"
+  },
+  "recommendations": {
+    "heading": "Das könnte Ihnen auch gefallen:"
+  },
+  "cabanas": {
+    "title": "Private Beach Cabanas",
+    "description": "🎉 Feiern Sie Ihren besonderen Tag bei uns! 🌴 Ob Geburtstag oder Flitterwochen – machen Sie ihn unvergesslich in unserer Beach Cabana – dort, wo sich das Rote Meer mit glücklichen Erinnerungen trifft.",
+    "notice": "Um Ihre Cabana zu buchen, besuchen Sie bitte die Rezeption.",
+    "imageAlt": "Private Strand-Cabana am Meer"
+  },
+  "extra_charge_notice": "Bitte beachten Sie: Die Zahlung für Ihre Sushi-Bestellung muss bis 13:00 Uhr am Tag Ihrer Reservierung an der Rezeption erfolgen. Wenn die Zahlung bis dahin nicht eingegangen ist, wird die Bestellung storniert.",
+  "selected_sushi": "Ausgewähltes Sushi"
+}

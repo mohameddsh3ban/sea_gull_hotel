@@ -1,0 +1,40 @@
+# dependencies
+node_modules/
+
+# builds
+dist/
+build/
+.vite/
+
+# env & OS junk
+.env
+.env.*
+.DS_Store
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Firebase (ignore if you don't want to track)
+.firebase/
+firebase.json
+.firebaserc
+
+# dependencies
+node_modules/
+
+# builds
+dist/
+build/
+.vite/
+
+# env & OS junk
+.env
+.env.*
+.DS_Store
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

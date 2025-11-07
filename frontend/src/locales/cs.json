@@ -1,0 +1,100 @@
+{
+  "pick_restaurant": "Vyberte restauraci",
+  "welcome_sub": "Užijte si světové kuchyně s výhledem na moře.",
+  "reserve_now": "Rezervovat",
+  "extra_charge": "Za příplatek",
+  "book_table": "Rezervujte si stůl",
+  "restaurant_menu": "Menu restaurace",
+  "cant_see_menu": "Nemůžete zobrazit menu?",
+  "click_here": "Klikněte sem pro otevření",
+  "select_date": "Vyberte datum",
+  "time_fixed": "Čas: 19:00 - 20:00",
+  "number_of_guests": "Počet hostů",
+  "room_number": "Číslo pokoje (povinné)",
+  "your_name": "Vaše jméno (nepovinné)",
+  "email": "Emailová adresa",
+  "confirm_reservation": "Potvrdit rezervaci",
+  "sending": "Odesílání...",
+  "room_required": "Číslo pokoje je povinné.",
+  "reservation_error": "Došlo k problému. Zkuste to prosím znovu.",
+  "home": "Domů",
+  "about": "O nás",
+  "contact": "Kontakt",
+  "hotelName": "Seagull Beach Resort",
+  "seafood_desc": "Čím čerstvější, tím lepší",
+  "chinese_desc": "Zažijte čínskou kuchyni",
+  "italian_desc": "Italská cesta je ta pravá!",
+  "indian_desc": "Koření a více.",
+  "seafood_name": "Mořské plody",
+  "chinese_name": "Čínská",
+  "italian_name": "Italská",
+  "indian_name": "Indická",
+  "seats_left": "Zbývá {{count}} míst",
+  "welcome_message": "Vítejte v našich à la carte restauracích",
+  "Button": "Rezervovat nyní",
+  "menu_button": "Zobrazit PDF",
+  "first_name": "Křestní jméno",
+  "last_name": "příjmení",
+  "select_main_course": "Vyberte hlavní chod",
+  "chicken": "Kuře",
+  "meat": "Maso",
+  "comments_placeholder": "Komentář",
+  "fish_reservation_heading": "Pro rezervace v rybí restauraci",
+  "fish_reservation_subtext": "Kontaktujte tým Food Courtu mezi 8:00 - 10:00",
+  "add_sushi": "Přidat sushi",
+  "choose_sushi": "Vyberte si sushi",
+  "total_price": "Celkem",
+  "quatro_formagi": "Quattro Formaggi",
+"chicken_pizza": "Kuřecí pizza",
+  "petto_chicken": "Petto di Pollo (kuřecí prsa)",
+  "sushi_categories": {
+    "hot_rolls": "Teplé rolky (6 kusů)",
+    "maki_rolls": "Maki rolky (6 kusů)"
+  },
+  "sushi_items": {
+    "Hot Dynamites": {
+      "title": "Hot Dynamites",
+      "description": "Losos, sýr Philadelphia, avokádo, pálivá majonéza"
+    },
+    "Hot Crab": {
+      "title": "Hot Crab",
+      "description": "Krab, losos, avokádo, japonská majonéza"
+    },
+    "Hot Dragon": {
+      "title": "Hot Dragon",
+      "description": "Losos, krevety, sýr Philadelphia, avokádo"
+    },
+    "Sake Maki": {
+      "title": "Sake Maki",
+      "description": "Losos, pálivá majonéza"
+    },
+    "Seagull Roll": {
+      "title": "Seagull Roll",
+      "description": "Smažené krevety, teriyaki omáčka"
+    },
+    "Kappa Roll": {
+      "title": "Kappa Roll",
+      "description": "Okurka, sezamová semínka"
+    },
+    "Kabi Maki": {
+      "title": "Kabi Maki",
+      "description": "Vařené krevety, avokádo, pálivá majonéza"
+    }
+  },
+  "confirmation": {
+    "title": "Rezervace potvrzena!",
+    "message": "Děkujeme, že jste si u nás rezervovali pobyt. Těšíme se na vaši návštěvu.",
+    "backHome": "Zpět na hlavní stránku"
+  },
+  "recommendations": {
+    "heading": "Mohlo by se vám také líbit:"
+  },
+  "cabanas": {
+    "title": "Private Beach Cabanas",
+    "description": "🎉 Oslavte svůj výjimečný den s námi! 🌴 Ať už jde o narozeniny nebo líbánky, proměňte ho v nezapomenutelný zážitek v naší plážové cabaně – tam, kde se Rudé moře setkává s radostnými vzpomínkami.",
+    "notice": "Pro rezervaci své cabany prosím navštivte recepci.",
+    "imageAlt": "Soukromá plážová cabana u oceánu"
+  },
+  "extra_charge_notice": "Upozornění: Platba za vaši objednávku sushi musí být provedena na recepci do 13:00 v den rezervace. Pokud platba nebude přijata včas, objednávka bude zrušena.",
+  "selected_sushi": "Vybrané sushi"
+}

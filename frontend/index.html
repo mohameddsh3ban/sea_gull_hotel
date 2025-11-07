@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+  />
+  <title>Restaurant Reservation</title>
+
+  <!-- Fonts (Inter for UI, Poppins for headings) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@500;600;700&display=swap"
+    rel="stylesheet"
+  />
+
+  <!-- Soft hero pattern (optional, can remove) -->
+  <style>
+    body::before {
+      content: "";
+      position: fixed; inset: -10%;
+      background:
+        radial-gradient(600px 300px at 10% -10%, rgba(14,165,233,0.08), transparent 60%),
+        radial-gradient(500px 260px at 110% -20%, rgba(99,102,241,0.08), transparent 60%),
+        radial-gradient(400px 250px at 60% -15%, rgba(16,185,129,0.06), transparent 60%);
+      pointer-events: none; z-index: -1;
+    }
+  </style>
+</head>
+<body class="bg-gradient-to-br from-[#f8fafc] via-[#f6f8fb] to-[#eef2f7]">
+  <div id="root"></div>
+  <script type="module" src="/src/index.jsx"></script>
+</body>
+</html>

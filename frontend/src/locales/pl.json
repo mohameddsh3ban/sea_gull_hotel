@@ -1,0 +1,100 @@
+{
+  "pick_restaurant": "Wybierz restaurację",
+  "welcome_sub": "Delektuj się światowymi kuchniami z widokiem na morze.",
+  "reserve_now": "Zarezerwuj teraz",
+  "book_table": "Zarezerwuj stolik",
+  "restaurant_menu": "Menu restauracji",
+  "cant_see_menu": "Nie możesz zobaczyć menu?",
+  "extra_charge": "Dodatkowa opłata",
+  "click_here": "Kliknij tutaj, aby je otworzyć",
+  "select_date": "Wybierz datę",
+  "time_fixed": "Godzina: 19:00 - 20:00",
+  "number_of_guests": "Liczba gości",
+  "room_number": "Numer pokoju (wymagane)",
+  "your_name": "Twoje imię (opcjonalnie)",
+  "email": "Adres e-mail",
+  "confirm_reservation": "Potwierdź rezerwację",
+  "sending": "Wysyłanie...",
+  "room_required": "Numer pokoju jest wymagany.",
+  "reservation_error": "Wystąpił problem. Spróbuj ponownie.",
+  "home": "Strona główna",
+  "about": "O nas",
+  "contact": "Kontakt",
+  "hotelName": "Seagull Beach Resort",
+  "seafood_desc": "Im świeższe, tym lepsze",
+  "chinese_desc": "Poznaj chińską kuchnię",
+  "italian_desc": "Włoska kuchnia to jest to!",
+  "indian_desc": "Przyprawy i więcej.",
+  "seafood_name": "Owoce morza",
+  "chinese_name": "Chińska",
+  "italian_name": "Włoska",
+  "indian_name": "Indyjska",
+  "seats_left": "Pozostało miejsc: {{count}}",
+  "welcome_message": "Witamy w naszych restauracjach à la carte",
+  "Button": "Zarezerwuj teraz",
+  "menu_button": "Zobacz PDF",
+  "first_name": "imię",
+  "last_name": "nazwisko",
+  "select_main_course": "Wybierz danie główne",
+  "chicken": "Kurczak",
+  "meat": "Mięso",
+  "comments_placeholder": "Komentarz",
+  "fish_reservation_heading": "Rezerwacje w restauracji rybnej",
+  "fish_reservation_subtext": "Skontaktuj się z zespołem Food Court między 8:00 a 10:00",
+  "add_sushi": "Dodaj sushi",
+  "choose_sushi": "Wybierz swoje sushi",
+  "total_price": "Razem",
+  "quatro_formagi": "Quattro Formaggi",
+  "chicken_pizza": "Pizza z kurczakiem",
+  "petto_chicken": "Petto di Pollo (pierś z kurczaka)",
+  "sushi_categories": {
+    "hot_rolls": "Gorące rolki (6 sztuk)",
+    "maki_rolls": "Rolki maki (6 sztuk)"
+  },
+  "sushi_items": {
+    "Hot Dynamites": {
+      "title": "Hot Dynamites",
+      "description": "Łosoś, ser Philadelphia, awokado, pikantny majonez"
+    },
+    "Hot Crab": {
+      "title": "Hot Crab",
+      "description": "Krab, łosoś, awokado, japoński majonez"
+    },
+    "Hot Dragon": {
+      "title": "Hot Dragon",
+      "description": "Łosoś, krewetki, ser Philadelphia, awokado"
+    },
+    "Sake Maki": {
+      "title": "Sake Maki",
+      "description": "Łosoś, pikantny majonez"
+    },
+    "Seagull Roll": {
+      "title": "Seagull Roll",
+      "description": "Smażone krewetki, sos teriyaki"
+    },
+    "Kappa Roll": {
+      "title": "Kappa Roll",
+      "description": "Ogórek, nasiona sezamu"
+    },
+    "Kabi Maki": {
+      "title": "Kabi Maki",
+      "description": "Gotowane krewetki, awokado, pikantny majonez"
+    }
+  },
+  "confirmation": {
+    "title": "Rezerwacja potwierdzona!",
+    "message": "Dziękujemy za dokonanie rezerwacji. Czekamy na Twój przyjazd.",
+    "backHome": "Powrót do strony głównej"
+  },
+  "recommendations": {
+    "heading": "Może Ci się spodobać:"
+  },
+  "cabanas": {
+    "title": "Private Beach Cabanas",
+    "description": "🎉 Świętuj swój wyjątkowy dzień z nami! 🌴 Niezależnie czy to urodziny czy miesiąc miodowy, spraw, by był niezapomniany w naszej Beach Cabana – gdzie Morze Czerwone spotyka się z radosnymi wspomnieniami.",
+    "notice": "Aby zarezerwować cabanę, prosimy odwiedzić recepcję.",
+    "imageAlt": "Prywatna plażowa cabana nad oceanem"
+  },
+  "extra_charge_notice": "Uwaga: Płatność za zamówienie sushi musi zostać dokonana w recepcji do godziny 13:00 w dniu rezerwacji. Jeśli płatność nie zostanie otrzymana do tego czasu, zamówienie zostanie anulowane.",
+  "selected_sushi": "Wybrane sushi"
+}
