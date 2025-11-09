@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 from firebase_admin import firestore
 from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 from datetime import datetime, timedelta, time as dt_time
@@ -8,14 +8,13 @@ from app.api.deps import require_role
 from app.services.email import send_review_request_email
 from app.services.firestore import get_db
 from app.core.config import settings
-
 router = APIRouter()
 
 def generate_review_token():
     return secrets.token_urlsafe(24)
 
 @router.post("/tasks/send-review-requests")
-async def send_review_requests(request: Request):
+async def send_review_requests(request: Request, background_tasks: BackgroundTasks):
     """Cron job to send review emails for yesterday's reservations."""
     # This endpoint should be protected by a cron secret or similar mechanism
     # For now, we'll assume it's called internally or by a trusted cron service
@@ -49,7 +48,8 @@ async def send_review_requests(request: Request):
         token = generate_review_token()
         
         try:
-            send_review_request_email(email, name, restaurant, token)
+            # Use background_tasks for sending email
+            background_tasks.add_task(send_review_request_email, email, name, restaurant, token)
             batch.update(doc.reference, {
                 "review.requestSent": True,
                 "review.requestSentAt": SERVER_TIMESTAMP,
@@ -60,7 +60,7 @@ async def send_review_requests(request: Request):
             failures.append({"id": doc.id, "error": str(e)})
     
     if sent > 0:
-        batch.commit()
+        await batch.commit() # Use await for async batch commit
     
     return {"sent": sent, "failed": failures}
 

@@ -1,9 +1,12 @@
+
 from fastapi import APIRouter, Depends, HTTPException
 from firebase_admin import auth as admin_auth
 
 from app.api.deps import get_current_user, require_role
 
 router = APIRouter()
+
+# REMOVE THE "/token" ENDPOINT AND ITS IMPORTS
 
 @router.get("/users/me")
 async def read_users_me(current_user: dict = Depends(get_current_user)):

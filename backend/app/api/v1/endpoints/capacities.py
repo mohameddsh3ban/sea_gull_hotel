@@ -27,7 +27,6 @@ async def get_capacities():
     
     return result
 
-@router.post("/capacities")
 @router.post("/capacities", dependencies=[Depends(require_role("admin"))])
 async def save_capacities(capacities: dict):
     """Save capacities with validation."""
@@ -70,5 +69,5 @@ async def save_capacities(capacities: dict):
                 "reserved_guests": 0
             })
     
-    batch.commit()
+    await batch.commit()
     return {"message": "Capacities saved successfully"}

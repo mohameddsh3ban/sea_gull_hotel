@@ -30,19 +30,6 @@ async def create_reservation(
     cancel_token = str(uuid.uuid4())
     name = f"{data.first_name} {data.last_name}".strip()
     
-    # Check for duplicate booking
-    existing = list(db.collection("reservations")
-        .where("room", "==", data.room)
-        .where("date", "==", data.date)
-        .limit(1)
-        .stream())
-    
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail="This room already has a reservation today"
-        )
-    
     # Prepare reservation data
     reservation_data = {
         "name": name,
@@ -66,15 +53,13 @@ async def create_reservation(
         "created_at": SERVER_TIMESTAMP
     }
     
-    # Transaction
-    transaction = db.transaction()
     capacity_key = f"{data.restaurant}_{data.date}"
     capacity_ref = db.collection("capacities").document(capacity_key)
     new_reservation_ref = db.collection("reservations").document()
     
-    @firestore.transactional
-    def create_reservation_transaction(transaction):
-        capacity_doc = capacity_ref.get(transaction=transaction)
+    @firestore.async_transactional
+    async def create_reservation_transaction(transaction, db_client):
+        capacity_doc = await capacity_ref.get(transaction=transaction)
         
         if not capacity_doc.exists:
             raise ValueError(f"No capacity set for {data.restaurant} on {data.date}")
@@ -98,7 +83,7 @@ async def create_reservation(
         return new_reservation_ref.id
     
     try:
-        reservation_id = create_reservation_transaction(transaction)
+        reservation_id = await create_reservation_transaction(db.transaction(), db)
         
         # Queue email
         background_tasks.add_task(
@@ -137,38 +122,46 @@ async def list_reservations(
     
     query = query.order_by("date", direction=firestore.Query.DESCENDING)
     
-    # Execute and filter
-    all_docs = list(query.stream())
+    # Cursor-based pagination
+    if filters.last_id:
+        last_doc_ref = db.collection("reservations").document(filters.last_id)
+        last_doc = await last_doc_ref.get()
+        if last_doc.exists:
+            query = query.start_after(last_doc)
     
+    # Apply limit
+    query = query.limit(filters.limit)
+    
+    # Execute query
+    docs = [doc async for doc in query.stream()]
+    
+    # In-memory search filter (if needed, as Firestore doesn't support full-text search)
     if filters.search:
         search_lower = filters.search.lower()
-        all_docs = [
-            doc for doc in all_docs
+        docs = [
+            doc for doc in docs
             if search_lower in str(doc.to_dict().get("name", "")).lower()
             or search_lower in str(doc.to_dict().get("room", "")).lower()
         ]
     
-    # Paginate
-    total_items = len(all_docs)
-    total_pages = (total_items + filters.limit - 1) // filters.limit
-    offset = (filters.page - 1) * filters.limit
-    page_docs = all_docs[offset:offset + filters.limit]
-    
     # Format
     reservations = [
         ReservationResponse(id=doc.id, **doc.to_dict())
-        for doc in page_docs
+        for doc in docs
     ]
     
+    # Determine next_last_id for cursor-based pagination
+    next_last_id = reservations[-1].id if reservations else None
+    
+    # For total_items and total_pages, a separate count query would be needed for true server-side pagination.
+    # For simplicity, we'll return a basic pagination info.
     return PaginatedReservations(
         items=reservations,
         pagination={
-            "total_items": total_items,
-            "total_pages": total_pages,
-            "current_page": filters.page,
+            "current_page_items": len(reservations),
             "per_page": filters.limit,
-            "has_next": filters.page < total_pages,
-            "has_prev": filters.page > 1
+            "next_last_id": next_last_id,
+            "has_next": len(docs) == filters.limit # If we got 'limit' items, there might be more
         }
     )
 

@@ -1,4 +1,5 @@
 import requests
+import asyncio # Import asyncio for async operations
 from app.core.config import settings
 from firebase_admin import firestore
 from google.cloud.firestore_v1 import SERVER_TIMESTAMP
@@ -72,7 +73,7 @@ def build_email_html(name: str, **kwargs) -> str:
     """
     return html_content
 
-def send_confirmation_email(
+async def send_confirmation_email(
     email: str,
     name: str,
     reservation_id: str,
@@ -85,6 +86,9 @@ def send_confirmation_email(
     for attempt in range(max_retries):
         try:
             html_content = build_email_html(name=name, **kwargs)
+            
+            # Simulate async operation
+            await asyncio.sleep(1) 
             
             response = requests.post(
                 f"https://api.mailgun.net/v3/{settings.MAILGUN_DOMAIN}/messages",
@@ -116,7 +120,7 @@ def send_confirmation_email(
                 })
                 return False
 
-def send_review_request_email(to_email, guest_name, restaurant, token):
+async def send_review_request_email(to_email, guest_name, restaurant, token):
     """Send review request email."""
     review_url = f"{settings.FRONTEND_BASE_URL}/review/{token}"
     html_content = f"""
@@ -135,6 +139,9 @@ def send_review_request_email(to_email, guest_name, restaurant, token):
       </body>
     </html>
     """
+    
+    # Simulate async operation
+    await asyncio.sleep(1)
     
     response = requests.post(
         f"https://api.mailgun.net/v3/{settings.MAILGUN_DOMAIN}/messages",

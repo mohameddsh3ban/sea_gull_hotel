@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from app.core.config import settings
 from app.core.exceptions import AppException
 from app.api.v1 import api_router
+# from prometheus_fastapi_instrumentator import Instrumentator
 
 # Lifespan context for startup/shutdown
 @asynccontextmanager
@@ -35,6 +36,8 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan
 )
+
+# Instrumentator().instrument(app).expose(app)
 
 # CORS Middleware
 app.add_middleware(

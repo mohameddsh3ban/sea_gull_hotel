@@ -1,4 +1,6 @@
+// File: frontend/src/pages/admin/UploadGuestList.jsx
 import React, { useState } from 'react';
+import { auth } from '../../firebase'; // <-- IMPORT AUTH
 
 const API_URL = 'https://hotel-backend-ddng.onrender.com/upload-guestlist';
 
@@ -19,15 +21,25 @@ const UploadGuestList = () => {
       return;
     }
 
+    const user = auth.currentUser; // <-- GET CURRENT USER
+    if (!user) {
+        setMessage('❌ Error: You are not logged in.');
+        return;
+    }
+
     const formData = new FormData();
     formData.append('file', file);
-
-    const adminToken = sessionStorage.getItem('adminToken'); // Ensure it's stored under this key
+    
+    // GET TOKEN THE CORRECT WAY
+    const adminToken = await user.getIdToken();
 
     try {
       const response = await fetch(API_URL, {
         method: 'POST',
         headers: {
+          // NOTE: The backend for this endpoint uses 'x-admin-token'.
+          // A better practice would be to unify all auth to use the 'Authorization: Bearer <token>' header.
+          // For now, we just supply the token correctly.
           'x-admin-token': adminToken,
         },
         body: formData,
@@ -47,6 +59,7 @@ const UploadGuestList = () => {
   };
 
   return (
+    // ... rest of the component is the same
     <div className="max-w-lg mx-auto mt-10 p-6 bg-white rounded shadow text-center">
       <h2 className="text-xl font-bold mb-4">📤 Upload Guest List</h2>
       <form onSubmit={handleUpload}>

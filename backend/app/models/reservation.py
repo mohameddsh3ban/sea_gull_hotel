@@ -71,6 +71,7 @@ class ReservationFilter(BaseModel):
     from_date: Optional[str] = None
     to_date: Optional[str] = None
     search: Optional[str] = None
+    last_id: Optional[str] = None # For cursor-based pagination
 
 class PaginatedReservations(BaseModel):
     items: List[ReservationResponse]

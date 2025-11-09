@@ -1,12 +1,20 @@
 import React from 'react';
 import { useNavigate, NavLink } from 'react-router-dom';
+import { signOut } from "firebase/auth";
+import { auth } from "../firebase";
 
 const AdminHeader = () => {
   const navigate = useNavigate();
   const [open, setOpen] = React.useState(false);
 
-  const handleLogout = () => {
-    navigate('/login');
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      navigate('/login');
+    } catch (error) {
+      console.error("Logout failed:", error);
+      navigate('/login');
+    }
   };
 
   const linkBase =
