@@ -1,0 +1,64 @@
+<div class="max-w-xl mx-auto p-8 bg-white shadow rounded-2xl mt-10">
+  
+  @if (loading()) {
+    <app-loading-spinner />
+    <p class="text-center text-gray-500">Loading reservation details...</p>
+  } @else {
+    <h2 class="text-2xl font-bold mb-2 text-gray-800">Edit Reservation</h2>
+    <div class="bg-blue-50 p-4 rounded-lg mb-6 border border-blue-100">
+      <p class="text-gray-700"><span class="font-semibold">Guest:</span> {{ guestName() }}</p>
+      <p class="text-gray-700"><span class="font-semibold">Room:</span> {{ roomNumber() }}</p>
+      <p class="text-gray-700"><span class="font-semibold">Restaurant:</span> {{ restaurantName() }}</p>
+    </div>
+    
+    <form [formGroup]="form" (ngSubmit)="onSubmit()" class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700">Date</label>
+        <input 
+          type="date" 
+          formControlName="date" 
+          class="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 mt-1" 
+        />
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-gray-700">Time</label>
+        <select 
+          formControlName="time" 
+          class="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 mt-1"
+        >
+          @for (t of availableTimeSlots(); track t) {
+            <option [value]="t">{{ t }}</option>
+          }
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-gray-700">Number of Guests</label>
+        <input 
+          type="number" 
+          formControlName="guests" 
+          class="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500 mt-1" 
+        />
+      </div>
+
+      <div class="flex gap-3 pt-4">
+        <button 
+          type="button"
+          (click)="cancel()"
+          class="flex-1 bg-gray-100 text-gray-700 py-2 rounded hover:bg-gray-200 transition"
+        >
+          Cancel
+        </button>
+        
+        <button 
+          type="submit" 
+          [disabled]="submitting() || form.invalid"
+          class="flex-1 bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition disabled:bg-blue-400"
+        >
+          {{ submitting() ? 'Saving...' : 'Save Changes' }}
+        </button>
+      </div>
+    </form>
+  }
+</div>

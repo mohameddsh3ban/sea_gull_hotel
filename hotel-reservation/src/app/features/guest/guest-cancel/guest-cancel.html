@@ -1,0 +1,65 @@
+<div class="min-h-screen bg-gray-100 pt-24 md:pt-32 pb-10 px-4">
+  <div class="max-w-lg mx-auto bg-white rounded-2xl shadow-lg overflow-hidden p-8 text-center">
+    
+    @switch (status()) {
+      @case ('loading') {
+        <app-loading-spinner />
+        <p class="text-gray-500 mt-2">Processing...</p>
+      }
+
+      @case ('confirm') {
+        <div class="mb-6">
+          <div class="w-16 h-16 bg-yellow-100 text-yellow-600 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">
+            ⚠️
+          </div>
+          <h2 class="text-2xl font-bold text-gray-800 mb-2">Cancel Reservation?</h2>
+          
+          @if (reservation(); as res) {
+            <p class="text-gray-600 mb-6">
+              Are you sure you want to cancel your reservation for 
+              <span class="font-semibold text-gray-900">{{ res.first_name }} {{ res.last_name }}</span> at 
+              <span class="font-semibold text-gray-900">{{ res.restaurant }}</span> on 
+              <span class="font-semibold text-gray-900">{{ res.date }}</span>?
+            </p>
+          }
+
+          <div class="flex flex-col gap-3">
+            <button 
+              (click)="confirmCancellation()"
+              class="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-3 rounded-xl transition"
+            >
+              Yes, Cancel Reservation
+            </button>
+            <a routerLink="/" class="text-gray-500 hover:text-gray-700 text-sm">Keep Reservation</a>
+          </div>
+        </div>
+      }
+
+      @case ('success') {
+        <div>
+          <div class="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">
+            ✅
+          </div>
+          <h2 class="text-2xl font-bold text-gray-800 mb-2">Reservation Cancelled</h2>
+          <p class="text-gray-600 mb-6">Your reservation has been successfully cancelled.</p>
+          <a routerLink="/" class="inline-block bg-gray-800 hover:bg-gray-900 text-white px-6 py-2 rounded-lg transition">
+            Return Home
+          </a>
+        </div>
+      }
+
+      @case ('error') {
+        <div>
+          <div class="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">
+            ❌
+          </div>
+          <h2 class="text-2xl font-bold text-gray-800 mb-2">Invalid Link</h2>
+          <p class="text-gray-600 mb-6">We couldn't find this reservation. It may have already been cancelled or the link has expired.</p>
+          <a routerLink="/" class="inline-block bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg transition">
+            Go Home
+          </a>
+        </div>
+      }
+    }
+  </div>
+</div>

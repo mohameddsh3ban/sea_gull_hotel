@@ -1,0 +1,100 @@
+<div class="max-w-6xl mx-auto p-6">
+  <h1 class="text-2xl font-bold mb-4 text-gray-800">Restaurant Reviews</h1>
+
+  <!-- Controls -->
+  <div class="bg-white rounded-xl shadow p-4 mb-4 grid grid-cols-1 md:grid-cols-5 gap-3">
+    <div>
+      <label class="block text-xs text-gray-500 mb-1 uppercase font-bold">Restaurant</label>
+      <select [(ngModel)]="restaurantId" (change)="loadData()" class="w-full border p-2 rounded bg-gray-50">
+        <option value="Italian">Italian</option>
+        <option value="Chinese">Chinese</option>
+        <option value="Indian">Indian</option>
+        <option value="Oriental">Oriental</option>
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs text-gray-500 mb-1 uppercase font-bold">Sort</label>
+      <select [(ngModel)]="sort" (change)="loadData()" class="w-full border p-2 rounded bg-gray-50">
+        <option value="newest">Newest First</option>
+        <option value="oldest">Oldest First</option>
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs text-gray-500 mb-1 uppercase font-bold">Period</label>
+      <div class="flex gap-1">
+        <button (click)="periodDays = 30; loadData()" [class.bg-gray-800]="periodDays===30" [class.text-white]="periodDays===30" class="px-3 py-2 border rounded text-sm transition">30d</button>
+        <button (click)="periodDays = 90; loadData()" [class.bg-gray-800]="periodDays===90" [class.text-white]="periodDays===90" class="px-3 py-2 border rounded text-sm transition">90d</button>
+      </div>
+    </div>
+    <div class="flex items-end md:col-span-2 justify-end">
+      <button (click)="loadData()" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition">Refresh Data</button>
+    </div>
+  </div>
+
+  <!-- Summary -->
+  <div class="bg-white rounded-xl shadow p-6 mb-6 border-l-4 border-blue-500">
+    <div class="flex items-center gap-8">
+      <div>
+        <div class="text-sm text-gray-500 uppercase">Average Rating</div>
+        <div class="text-4xl font-bold text-gray-800">{{ summary.avg | number:'1.1-1' }}</div>
+      </div>
+      <div>
+        <div class="text-sm text-gray-500 uppercase">Total Reviews</div>
+        <div class="text-4xl font-bold text-gray-800">{{ summary.count }}</div>
+      </div>
+      <div class="ml-auto">
+        <button (click)="showBreakdown = !showBreakdown" class="text-blue-600 hover:underline text-sm">
+          {{ showBreakdown ? 'Hide' : 'Show' }} Breakdown
+        </button>
+      </div>
+    </div>
+
+    @if (showBreakdown) {
+      <div class="mt-6 border-t pt-4 space-y-2">
+        @for (row of getHistogramRows(); track row.score) {
+          <div class="flex items-center gap-3">
+            <div class="w-6 text-sm font-bold">{{ row.score }}</div>
+            <div class="flex-1 bg-gray-100 rounded-full h-2 overflow-hidden">
+              <div class="bg-blue-500 h-full" [style.width.%]="(row.count / getMaxCount()) * 100"></div>
+            </div>
+            <div class="w-8 text-xs text-gray-500 text-right">{{ row.count }}</div>
+          </div>
+        }      </div>
+    }
+  </div>
+
+  <!-- List -->
+  <div class="space-y-4">
+    @if (loading()) {
+      <app-loading-spinner />
+    } @else {
+      @for (review of reviews; track review.id) {
+        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition">
+          <div class="flex justify-between items-start mb-2">
+            <div class="flex items-center gap-3">
+              <span class="bg-blue-100 text-blue-800 font-bold px-3 py-1 rounded-lg">{{ review.rating }}/10</span>
+              <span class="font-medium text-gray-900">{{ review.guestName || 'Anonymous' }}</span>
+            </div>
+            <span class="text-xs text-gray-400">{{ review.createdAt | date:'medium' }}</span>
+          </div>
+          
+          @if (review.comment) {
+            <p class="text-gray-700 mt-2 bg-gray-50 p-3 rounded-lg italic">"{{ review.comment }}"</p>
+          }
+          
+          <div class="mt-2 text-xs text-gray-400 flex gap-4">
+            <span>Room: {{ review.room || 'N/A' }}</span>
+            <span>Reservation ID: ...{{ review.reservationId | slice:-6 }}</span>
+          </div>
+        </div>
+      }      @empty {
+        <div class="text-center py-10 text-gray-500">No reviews found for this period.</div>
+      }
+      @if (reviews.length > 0) {
+        <button (click)="loadMore()" class="w-full py-3 bg-gray-100 text-gray-600 rounded-xl hover:bg-gray-200 font-medium">
+          Load More Reviews
+        </button>
+      }
+    }
+  </div>
+</div>

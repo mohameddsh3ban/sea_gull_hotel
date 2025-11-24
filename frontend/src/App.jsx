@@ -36,6 +36,9 @@ import About from './pages/About';
 import Contact from './pages/Contact';
 import GuestCancel from './pages/GuestCancel';
 import ReviewPage from './pages/Review';
+import ModifyReservation from './pages/ModifyReservation';
+import AdminSettings from './pages/admin/AdminSettings';
+import AdminAnalytics from './pages/admin/AdminAnalytics';
 
 
 const AppRoutes = () => {
@@ -73,6 +76,7 @@ const AppRoutes = () => {
           <Route path="/contact" element={<Contact />} />
           <Route path="/cancel/:token" element={<GuestCancel />} />
           <Route path="/review/:token" element={<ReviewPage />} />
+          <Route path="/modify/:reservationId" element={<ModifyReservation />} />
 
 
           {/* ---------- Auth (single login) ---------- */}
@@ -133,6 +137,22 @@ const AppRoutes = () => {
             element={
               <ProtectedRoute requiredRole="admin">
                 <Reviews />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/settings"
+            element={
+              <ProtectedRoute requiredRole="admin">
+                <AdminSettings />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/analytics"
+            element={
+              <ProtectedRoute requiredRole="admin">
+                <AdminAnalytics />
               </ProtectedRoute>
             }
           />

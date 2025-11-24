@@ -18,13 +18,13 @@ module.exports = {
       colors: {
         // Modern palette
         primary: { DEFAULT: "#0f172a", foreground: "#ffffff" }, // slate-900
-        accent: { DEFAULT: "#0ea5e9", hover: "#0284c7" },       // sky-500/600
-        success: "#10b981",                                     // emerald-500
-        warning: "#f59e0b",                                     // amber-500
-        danger:  "#ef4444",                                     // red-500
+        accent: { DEFAULT: "#0ea5e9", hover: "#0284c7" }, // sky-500/600
+        success: "#10b981", // emerald-500
+        warning: "#f59e0b", // amber-500
+        danger: "#ef4444", // red-500
         surface: "#ffffff",
         surfaceMuted: "#f8fafc",
-        border:  "#e2e8f0",
+        border: "#e2e8f0",
       },
       fontFamily: {
         sans: [

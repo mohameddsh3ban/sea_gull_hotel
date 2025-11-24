@@ -7,6 +7,25 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 const API_BASE = 'https://reservation-backend-demo.onrender.com';
 
+const generateTimeSlots = (start, end, interval) => {
+  const slots = [];
+  const [startH, startM] = start.split(':').map(Number);
+  const [endH, endM] = end.split(':').map(Number);
+  
+  let current = new Date();
+  current.setHours(startH, startM, 0, 0);
+  
+  const endTime = new Date();
+  endTime.setHours(endH, endM, 0, 0);
+  
+  while (current <= endTime) {
+    const timeString = current.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    slots.push(timeString);
+    current.setMinutes(current.getMinutes() + interval);
+  }
+  return slots;
+};
+
 const ReservationForm = () => {
   const { restaurantId } = useParams();
   const allowedRestaurants = ['Indian', 'Chinese', 'Italian', 'Oriental']; // ✅ only your actual restaurants
@@ -22,6 +41,11 @@ const ReservationForm = () => {
   const [spotsLeft, setSpotsLeft] = useState(null);
   const [capacities, setCapacities] = useState({});
   const [showSushiModal, setShowSushiModal] = useState(false);
+
+  // NEW STATE
+  const [restaurantConfig, setRestaurantConfig] = useState(null);
+  const [availableTimeSlots, setAvailableTimeSlots] = useState([]);
+  const [configLoading, setConfigLoading] = useState(true);
 
   const sushiItems = {
     hot_rolls: [
@@ -127,6 +151,33 @@ const ReservationForm = () => {
     }
   }, [formData.guests]);
 
+  // 1. FETCH CONFIG ON LOAD
+  useEffect(() => {
+    const fetchConfig = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/config`);
+        const data = await res.json();
+        const myConfig = data[restaurantId];
+        
+        if (myConfig) {
+          setRestaurantConfig(myConfig);
+          // Generate slots immediately if config exists
+          const slots = generateTimeSlots(myConfig.openingTime, myConfig.closingTime, myConfig.intervalMinutes);
+          setAvailableTimeSlots(slots);
+          
+          // Set default time to first slot if existing '19:00' isn't valid
+          if (!slots.includes(formData.time)) {
+            setFormData(prev => ({...prev, time: slots[0]}));
+          }
+        }
+      } catch (e) {
+        console.error("Config load failed", e);
+      } finally {
+        setConfigLoading(false);
+      }
+    };
+    fetchConfig();
+  }, [restaurantId]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -146,35 +197,15 @@ const ReservationForm = () => {
     }
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!formData.room) {
-      toast.error(t('room_required'));
-      return;
-    }
-    if (!formData.date) {
-      toast.error(t('select_date'));
-      return;
-    }
-
-    if (
-      (restaurantId.toLowerCase() === 'chinese' || restaurantId.toLowerCase() === 'indian' || restaurantId.toLowerCase() === 'italian') &&
-      (!Array.isArray(formData.main_courses) || formData.main_courses.length !== formData.guests || formData.main_courses.some(m => !m))
-    ) {
-      toast.error('Please select a main course for each guest.');
-      return;
-    }
-
+  // 1. Separate the actual API call into a new function
+  const finalizeReservation = async (finalUpsellItems = formData.upsell_items) => {
     if (isSending) return;
+    setIsSending(true);
 
     try {
-      setIsSending(true);
-
-      console.log("Submitting reservation:", { ...formData, restaurant: restaurantId }); //remove after.
-
-      // 💰 Calculate total sushi upsell price
+      // Recalculate price based on final selection
       let upsell_total_price = 0;
-      Object.entries(formData.upsell_items).forEach(([item, count]) => {
+      Object.entries(finalUpsellItems).forEach(([item, count]) => {
         if (count > 0) {
           Object.values(sushiItems).forEach(category => {
             category.forEach(sushi => {
@@ -186,29 +217,57 @@ const ReservationForm = () => {
         }
       });
 
-      const response = await fetch(`${API_BASE}/reserve`, {
+      const response = await fetch(`${API_BASE}/api/v1/reservations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...formData,
           restaurant: restaurantId,
+          upsell_items: finalUpsellItems,
           upsell_total_price: Number(upsell_total_price.toFixed(2))
         }),
       });
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'Reservation failed');
+        throw new Error(errorData.detail || 'Reservation failed');
       }
 
       toast.success('Reservation confirmed! ✅');
       setTimeout(() => navigate('/confirmation'), 1500);
     } catch (error) {
       console.error('❌ Reservation Error:', error);
-      toast.error(error.message || 'There was a problem. Please try again.');
+      toast.error(error.message);
     } finally {
       setIsSending(false);
+      setShowSushiModal(false); // Close modal if open
     }
+  };
+
+  // 2. Intercept the form submit
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    // Basic validation
+    if (!formData.room || !formData.date) {
+      toast.error(t('room_required'));
+      return;
+    }
+
+    // Intercept Chinese Restaurant for Upsell
+    if (restaurantId === 'Chinese') {
+      // If they haven't selected anything yet, show the modal
+      const hasSelectedSushi = Object.values(formData.upsell_items).some(val => val > 0);
+
+      // logic: Always show modal if it hasn't been shown,
+      // or specifically check if they want to review order.
+      // Here we force the modal to appear to "Upsell"
+      setShowSushiModal(true);
+      return;
+    }
+
+    // For other restaurants, submit immediately
+    await finalizeReservation();
   };
 
   const getDayLabel = (date) => {
@@ -221,6 +280,19 @@ const ReservationForm = () => {
   };
 
   const isTodayBlocked = today.getHours() >= 11;
+
+  // 2. CHECK IF RESTAURANT IS CLOSED
+  if (!configLoading && restaurantConfig && !restaurantConfig.isActive) {
+     return (
+       <div className="max-w-4xl mx-auto pt-32 text-center p-6">
+         <div className="bg-red-50 border border-red-200 text-red-700 p-8 rounded-xl">
+           <h2 className="text-2xl font-bold mb-2">Restaurant Currently Closed</h2>
+           <p>The {restaurantId} restaurant is not accepting new reservations at this time.</p>
+           <button onClick={() => navigate('/')} className="mt-4 text-blue-600 underline">Back to Home</button>
+         </div>
+       </div>
+     );
+  }
 
   return (
     <div className="max-w-6xl mx-auto pt-24 md:pt-28 grid grid-cols-1 md:grid-cols-2 gap-6 p-4">
@@ -281,7 +353,26 @@ const ReservationForm = () => {
             </div>
           )}
 
-          <div className="w-full p-2 border rounded bg-gray-50 text-gray-700">{t('time_fixed')}</div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Time</label>
+            <select
+              name="time"
+              value={formData.time}
+              onChange={handleChange}
+              required
+              className="w-full border p-2 rounded bg-white"
+            >
+              {availableTimeSlots.length > 0 ? (
+                availableTimeSlots.map(time => (
+                  <option key={time} value={time}>
+                    {time}
+                  </option>
+                ))
+              ) : (
+                <option value="19:00">19:00</option> // Fallback
+              )}
+            </select>
+          </div>
 
           <select name="guests" value={formData.guests} onChange={handleChange} required className="w-full border p-2 rounded">
             <option value="">{t('number_of_guests')}</option>
@@ -373,16 +464,6 @@ const ReservationForm = () => {
           )}
           {restaurantId.toLowerCase() === 'chinese' && (
             <>
-              <button
-                type="button"
-                onClick={() => setShowSushiModal(true)}
-                className="mb-2 bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-500 shadow transition"
-              >
-                🍣 {t('add_sushi') || 'Add Sushi'}
-              </button>
-              <span className="ml-2 text-gray-500 text-xs align-middle">
-                ({t('extra_charge') || 'extra charge'})
-              </span>
 
               {/* Preview selected sushi items */}
               {Object.entries(formData.upsell_items)
@@ -472,9 +553,8 @@ const ReservationForm = () => {
                 &times;
               </button>
 
-              <h3 className="text-xl font-semibold mb-4 text-gray-800">
-                {t('choose_sushi') || 'Choose Your Sushi'}
-              </h3>
+              <h3 className="text-xl font-bold mb-2 text-gray-800">Chef's Recommendation 🍣</h3>
+              <p className="text-gray-600 mb-4 text-sm">Would you like to add some Sushi to your dinner?</p>
 
               {Object.entries(sushiItems).map(([category, items]) => (
                 <div
@@ -537,12 +617,29 @@ const ReservationForm = () => {
                 </div>
               ))}
 
-              <button
-                onClick={() => setShowSushiModal(false)}
-                className="mt-6 bg-blue-600 text-white w-full py-2 rounded hover:bg-blue-700"
-              >
-                {t('done') || 'Done'}
-              </button>
+              <div className="mt-6 flex gap-3">
+                <button
+                  onClick={() => {
+                    // Option A: Skip Upsell (Clear selection and submit)
+                    const emptyUpsell = {};
+                    finalizeReservation(emptyUpsell);
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                >
+                  No, Thanks
+                </button>
+
+                <button
+                  onClick={() => {
+                    // Option B: Confirm Upsell
+                    finalizeReservation(formData.upsell_items);
+                  }}
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold"
+                >
+                  Add to Order
+                </button>
+              </div>
+
             </motion.div>
           </motion.div>
         )}
@@ -552,4 +649,3 @@ const ReservationForm = () => {
 };
 
 export default ReservationForm;
-

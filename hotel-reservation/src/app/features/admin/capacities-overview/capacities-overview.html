@@ -1,0 +1,58 @@
+<div class="max-w-7xl mx-auto p-8">
+  <h2 class="text-3xl font-bold mb-6 text-gray-800">Capacities Overview</h2>
+
+  @if (loading()) {
+    <app-loading-spinner />
+  } @else {
+    <div class="overflow-x-auto rounded-lg border border-gray-200 shadow">
+      <table class="w-full border-collapse bg-white">
+        <thead>
+          <tr>
+            <th class="p-4 bg-gray-100 border-b border-r font-bold text-left w-40">Restaurant</th>
+            @for (day of days; track day) {
+              <th class="p-3 bg-gray-100 border-b border-r text-center min-w-[120px]">
+                <div class="text-sm font-bold">{{ getHeaderLabel(day) }}</div>
+                <div class="text-xs text-gray-500 font-normal">{{ getDateKey(day) }}</div>
+              </th>
+            }
+          </tr>
+        </thead>
+        <tbody>
+          @for (rest of restaurants; track rest) {
+            <tr>
+              <td class="p-4 border-b border-r font-medium bg-gray-50">{{ rest }}</td>
+              @for (day of days; track day) {
+                @let cell = getCellData(rest, day);
+                @let capacity = cell?.capacity || 0;
+                @let reserved = cell?.reserved || 0;
+                @let remaining = capacity - reserved;
+                
+                <td [class]="getStatusColor(remaining, capacity)" class="p-3 border-b border-r text-sm align-top">
+                  <div class="flex justify-between items-end mb-1">
+                    <span class="font-bold text-lg leading-none">
+                      @if(capacity === 0) { - } @else { {{ remaining > 0 ? remaining : 0 }} }
+                    </span>
+                    <span class="text-xs opacity-70">{{ reserved }} / {{ capacity }}</span>
+                  </div>
+                  
+                  <div class="w-full bg-black/5 rounded-full h-1.5 overflow-hidden">
+                    <div 
+                      [class]="getBarColor(remaining, capacity)" 
+                      class="h-full rounded-full transition-all duration-500"
+                      [style.width.%]="getPercentage(reserved, capacity)"
+                    ></div>
+                  </div>
+
+                  <div class="mt-1 text-[10px] text-center opacity-80 font-medium">
+                    @if(capacity === 0) { Not Set }                    @else if (remaining <= 0) { Fully Booked }
+                    @else if (remaining <= 4) { Low Availability }
+                    @else { Available }
+                  </div>
+                </td>
+              }
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }</div>

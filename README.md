@@ -5,6 +5,7 @@ A production-ready, full-stack restaurant reservation platform built for Seagull
 ## 🌟 Features
 
 ### Guest Features
+
 - **Multi-Restaurant Booking:** Reserve tables at Indian, Chinese, Italian, or Oriental restaurants
 - **Real-Time Availability:** Live capacity checking with visual indicators
 - **Main Course Selection:** Restaurant-specific menu choices per guest
@@ -15,6 +16,7 @@ A production-ready, full-stack restaurant reservation platform built for Seagull
 - **Multi-Language Support:** 7 languages (EN, DE, RU, FR, CS, SR, PL)
 
 ### Admin Features
+
 - **Dashboard:** Comprehensive reservation management with filtering and pagination
 - **Capacity Management:** Set daily limits per restaurant for 6-day rolling window
 - **Capacity Overview:** Visual calendar with color-coded availability
@@ -23,6 +25,7 @@ A production-ready, full-stack restaurant reservation platform built for Seagull
 - **Export Reports:** PDF generation with full reservation details
 
 ### Staff Dashboards
+
 - **Reception:** Manage payment status for upsell items
 - **Kitchen:** View upcoming reservations with dietary details
 - **Accounting:** Track payment records and financial summaries
@@ -32,6 +35,7 @@ A production-ready, full-stack restaurant reservation platform built for Seagull
 ### Tech Stack
 
 **Frontend:**
+
 - React 18 with Vite
 - React Router v6 for navigation
 - Tailwind CSS for styling
@@ -42,6 +46,7 @@ A production-ready, full-stack restaurant reservation platform built for Seagull
 - Framer Motion for animations
 
 **Backend:**
+
 - FastAPI (Python)
 - Firebase Admin SDK
 - Google Cloud Firestore (database)
@@ -49,6 +54,7 @@ A production-ready, full-stack restaurant reservation platform built for Seagull
 - Prometheus (monitoring - optional)
 
 **Testing:**
+
 - pytest + httpx (backend)
 - Frontend testing: TBD (Vitest recommended)
 
@@ -157,10 +163,13 @@ cd backend
 
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Activate virtual environment (Windows)
+.\venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
+pip install pandas openpyxl
 
 # Create .env file
 cp .env.example .env  # Or create manually
@@ -204,7 +213,11 @@ python set_role.py
 **Start Backend:**
 
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# Activate virtual environment (if not already active)
+.\venv\Scripts\activate
+
+# Start Server
+uvicorn app.main:app --reload
 ```
 
 Backend will be available at `http://localhost:8000`  
@@ -250,6 +263,7 @@ Frontend will be available at `http://localhost:5173`
 ### Collections
 
 **`capacities`** - Restaurant capacity per date
+
 ```javascript
 {
   restaurant: "Italian",
@@ -260,6 +274,7 @@ Frontend will be available at `http://localhost:5173`
 ```
 
 **`reservations`** - Guest bookings
+
 ```javascript
 {
   name: "John Doe",
@@ -289,6 +304,7 @@ Frontend will be available at `http://localhost:5173`
 ```
 
 **`restaurant_reviews`** - Guest feedback
+
 ```javascript
 {
   reservationId: "res_123",
@@ -341,11 +357,14 @@ Authorization: Bearer {admin-token}
 Frontend routes are protected using `ProtectedRoute` component:
 
 ```javascript
-<Route path="/admin/dashboard" element={
-  <ProtectedRoute requiredRole="admin">
-    <AdminDashboard />
-  </ProtectedRoute>
-} />
+<Route
+  path="/admin/dashboard"
+  element={
+    <ProtectedRoute requiredRole="admin">
+      <AdminDashboard />
+    </ProtectedRoute>
+  }
+/>
 ```
 
 Backend endpoints use dependency injection:
@@ -363,6 +382,7 @@ async def list_reservations(
 ### Automated Emails
 
 1. **Reservation Confirmation** - Sent immediately upon booking
+
    - Includes reservation details, cancellation link
    - Triggered by: `POST /api/v1/reservations`
 
@@ -383,6 +403,7 @@ EMAIL_FROM=reservations@mg.yourdomain.com
 ### Email Templates
 
 Templates are defined in `backend/app/services/email.py`:
+
 - `build_email_html()` - Reservation confirmation
 - `send_review_request_email()` - Review request
 
@@ -404,6 +425,7 @@ pytest tests/test_reservations.py -v
 ```
 
 **Test Coverage:**
+
 - ✅ Reservation creation (success & validation)
 - ✅ Overbooking prevention (race conditions)
 - ✅ Concurrent request handling
@@ -412,7 +434,7 @@ pytest tests/test_reservations.py -v
 
 ### Frontend Tests
 
-*To be implemented - Recommended: Vitest + React Testing Library*
+_To be implemented - Recommended: Vitest + React Testing Library_
 
 ```bash
 # Future setup
@@ -475,12 +497,14 @@ FastAPI automatically generates interactive API docs:
 ### Key Endpoints
 
 **Public:**
+
 - `POST /api/v1/reservations` - Create reservation
 - `GET /cancel/{token}` - View cancellation page
 - `POST /cancel/{token}` - Cancel reservation
 - `POST /api/reviews/submit` - Submit review
 
 **Authenticated:**
+
 - `GET /api/v1/reservations` - List reservations (with filters)
 - `DELETE /api/v1/reservations/{id}` - Cancel reservation (admin)
 - `GET /api/v1/capacities` - Get capacities
@@ -507,11 +531,13 @@ git push origin feature/your-feature-name
 ### Code Style
 
 **Frontend:**
+
 - Use Prettier for formatting
 - Follow React best practices
 - Use functional components with hooks
 
 **Backend:**
+
 - Follow PEP 8 style guide
 - Use Black for formatting: `black app/`
 - Use type hints for function signatures
@@ -521,23 +547,28 @@ git push origin feature/your-feature-name
 ### Common Issues
 
 **"Firebase credentials not found"**
+
 - Ensure `service-account.json` is in `backend/` directory
 - Check file permissions (should be readable)
 
 **"Invalid token" errors**
+
 - Token may have expired - user needs to re-login
 - Check Firebase Auth is enabled in console
 
 **CORS errors**
+
 - Add your frontend URL to `ALLOWED_ORIGINS` in backend `.env`
 - Ensure frontend is using correct backend URL
 
 **Emails not sending**
+
 - Verify Mailgun API key and domain
 - Check Mailgun logs in dashboard
 - Ensure domain is verified in Mailgun
 
 **Capacity not updating**
+
 - Check Firestore rules allow write access
 - Verify admin role is set correctly
 - Check browser console for errors
@@ -558,12 +589,14 @@ This is a private project. For internal contributions:
 ## 📞 Support
 
 For technical issues or questions:
-- **Technical Lead:** omar.modrek@hurghadaseagull.com
+
+- **Owner** omar.modrek@hurghadaseagull.com
 - **Documentation:** Check `/docs` endpoint for API reference
 
 ## 🎯 Roadmap
 
 ### Completed ✅
+
 - Multi-restaurant reservation system
 - Real-time capacity management
 - Role-based access control
@@ -574,6 +607,7 @@ For technical issues or questions:
 - Backend testing suite
 
 ### Future Enhancements 🚧
+
 - Frontend testing with Vitest
 - SMS notifications (Twilio integration)
 - Mobile app (React Native)

@@ -1,0 +1,51 @@
+<div class="max-w-7xl mx-auto p-8">
+  <h2 class="text-3xl font-bold mb-6 text-gray-800">Manage Restaurant Capacities</h2>
+
+  @if (loading()) {
+    <app-loading-spinner />
+  } @else {
+    <div class="overflow-x-auto bg-white shadow rounded-lg border border-gray-200">
+      <table class="w-full text-sm text-left text-gray-500">
+        <thead class="text-xs text-gray-700 uppercase bg-gray-100">
+          <tr>
+            <th class="px-6 py-4 font-bold text-gray-900">Restaurant</th>
+            @for (day of days; track day) {
+              <th class="px-4 py-3 text-center min-w-[100px]">
+                {{ getHeaderLabel(day) }}
+              </th>
+            }
+          </tr>
+        </thead>
+        <tbody>
+          @for (rest of restaurants; track rest) {
+            <tr class="border-b hover:bg-gray-50">
+              <td class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap bg-gray-50/50">
+                {{ rest }}
+              </td>
+              @for (day of days; track day) {
+                <td class="px-4 py-3 text-center">
+                  <!-- We use array syntax access for dynamic keys -->
+                  <input 
+                    type="number" 
+                    [(ngModel)]="capacities[getDateKey(rest, day)]" 
+                    min="0"
+                    class="w-20 text-center border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 border p-1"
+                  />
+                </td>
+              }
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <div class="mt-6 flex justify-end">
+      <button 
+        (click)="save()"
+        [disabled]="saving()"
+        class="px-6 py-2.5 bg-blue-600 text-white font-medium text-sm leading-tight uppercase rounded shadow-md hover:bg-blue-700 hover:shadow-lg focus:bg-blue-700 focus:shadow-lg focus:outline-none focus:ring-0 active:bg-blue-800 active:shadow-lg transition duration-150 ease-in-out disabled:bg-gray-400"
+      >
+        {{ saving() ? 'Saving...' : 'Save Capacities' }}
+      </button>
+    </div>
+  }\n</div>

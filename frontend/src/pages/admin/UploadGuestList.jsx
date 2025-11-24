@@ -30,17 +30,14 @@ const UploadGuestList = () => {
     const formData = new FormData();
     formData.append('file', file);
     
-    // GET TOKEN THE CORRECT WAY
-    const adminToken = await user.getIdToken();
+    const token = await user.getIdToken(); // Get ID Token
 
     try {
       const response = await fetch(API_URL, {
         method: 'POST',
         headers: {
-          // NOTE: The backend for this endpoint uses 'x-admin-token'.
-          // A better practice would be to unify all auth to use the 'Authorization: Bearer <token>' header.
-          // For now, we just supply the token correctly.
-          'x-admin-token': adminToken,
+          // FIXED HEADER:
+          'Authorization': `Bearer ${token}`, 
         },
         body: formData,
       });
@@ -50,7 +47,7 @@ const UploadGuestList = () => {
       if (response.ok) {
         setMessage(`✅ ${result.message}`);
       } else {
-        setMessage(`❌ ${result.error}`);
+        setMessage(`❌ ${result.detail || result.error}`);
       }
     } catch (error) {
       setMessage('❌ Error uploading file.');

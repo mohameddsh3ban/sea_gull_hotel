@@ -50,6 +50,8 @@ const AdminHeader = () => {
             <NavLink to="/admin/manage-capacities" className={getLinkClass}>Manage Capacities</NavLink>
             <NavLink to="/admin/capacity-overview" className={getLinkClass}>Capacity Overview</NavLink>
             <NavLink to="/admin/reviews" className={getLinkClass}>Reviews</NavLink>
+            <NavLink to="/admin/settings" className={getLinkClass}>Settings</NavLink>
+            <NavLink to="/admin/analytics" className={getLinkClass}>Analytics</NavLink>
 
             <button
               onClick={handleLogout}
@@ -87,6 +89,8 @@ const AdminHeader = () => {
             <NavLink to="/admin/manage-capacities" className={getLinkClass} onClick={() => setOpen(false)}>Manage Capacities</NavLink>
             <NavLink to="/admin/capacity-overview" className={getLinkClass} onClick={() => setOpen(false)}>Capacity Overview</NavLink>
             <NavLink to="/admin/reviews" className={getLinkClass} onClick={() => setOpen(false)}>Reviews</NavLink>
+            <NavLink to="/admin/settings" className={getLinkClass} onClick={() => setOpen(false)}>Settings</NavLink>
+            <NavLink to="/admin/analytics" className={getLinkClass} onClick={() => setOpen(false)}>Analytics</NavLink>
 
             <button
               onClick={() => { setOpen(false); handleLogout(); }}

@@ -203,6 +203,55 @@ const ReservationsTable = ({ userRole }) => {
     }
   };
 
+  const downloadCSV = () => {
+    if (!allReservations || allReservations.length === 0) {
+      alert("No data to export");
+      return;
+    }
+
+    // 1. Define Headers
+    const headers = [
+      "ID", "Name", "Room", "Date", "Time", "Guests", 
+      "Restaurant", "VIP", "Paid", "Upsell Total", "Main Courses"
+    ];
+
+    // 2. Map Data to CSV Rows
+    const csvRows = [
+      headers.join(','), // Header Row
+      ...allReservations.map(row => {
+        const mainCourses = Array.isArray(row.main_courses) 
+          ? row.main_courses.join(';') 
+          : (row.main_course || '');
+        
+        return [
+          row.id,
+          `"${row.name}"`, // Quote strings to handle commas in names
+          row.room,
+          row.date,
+          row.time,
+          row.guests,
+          row.restaurant,
+          row.is_vip ? "Yes" : "No",
+          row.paid ? "Yes" : "No",
+          row.upsell_total_price || 0,
+          `"${mainCourses}"`
+        ].join(',');
+      })
+    ];
+
+    // 3. Create Blob and Download
+    const csvString = csvRows.join('\n');
+    const blob = new Blob([csvString], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.setAttribute('hidden', '');
+    a.setAttribute('href', url);
+    a.setAttribute('download', `reservations_export_${new Date().toISOString().slice(0,10)}.csv`);
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
   // toggle paid helper (direct, with Firebase ID token)
   const togglePaid = async (reservationId, currentPaid) => {
     const nextPaid = !currentPaid;
@@ -401,6 +450,14 @@ const ReservationsTable = ({ userRole }) => {
           >
             {({ loading }) => (loading ? 'Generating…' : 'Export PDF')}
           </PDFDownloadLink>
+
+          {/* NEW BUTTON */}
+          <button
+            onClick={downloadCSV}
+            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+          >
+            <span>📊 Export CSV</span>
+          </button>
         </div>
       </div>
       
@@ -435,8 +492,27 @@ const ReservationsTable = ({ userRole }) => {
           ) : (
             <tbody>
               {reservations.map((res) => (
-                <tr key={res.id} className="border-t hover:bg-blue-50 transition">
-                  <td className="p-3">{res.name || 'N/A'}</td>
+                <tr 
+                  key={res.id} 
+                  className={`border-t transition ${
+                    // GOLD BACKGROUND FOR VIPS
+                    res.is_vip 
+                      ? 'bg-yellow-50 hover:bg-yellow-100 border-l-4 border-l-yellow-400' 
+                      : 'hover:bg-blue-50'
+                  }`}
+                >
+                  <td className="p-3">
+                    <div className="flex flex-col">
+                      <span className="font-medium text-gray-900 flex items-center gap-2">
+                        {res.name || 'N/A'}
+                        {res.is_vip && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800 border border-yellow-200">
+                            ⭐ {res.vip_level || 'VIP'}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  </td>
                   <td className="p-3">{res.email || 'N/A'}</td>
                   <td className="p-3">{res.room}</td>
                   <td className="p-3">{res.date}</td>

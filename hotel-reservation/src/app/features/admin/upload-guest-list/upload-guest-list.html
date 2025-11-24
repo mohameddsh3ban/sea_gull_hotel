@@ -1,0 +1,41 @@
+<div class="max-w-lg mx-auto mt-10 p-8 bg-white rounded-xl shadow-md text-center">
+  <h2 class="text-2xl font-bold mb-6 text-gray-800">📤 Upload Guest List</h2>
+  
+  <form (submit)="handleUpload($event)" class="space-y-6">
+    
+    <!-- File Input Zone -->
+    <div class="flex items-center justify-center w-full">
+      <label for="dropzone-file" class="flex flex-col items-center justify-center w-full h-64 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 transition">
+        <div class="flex flex-col items-center justify-center pt-5 pb-6">
+          <svg class="w-8 h-8 mb-4 text-gray-500" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 16">
+            <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 13h3a3 3 0 0 0 0-6h-.025A5.56 5.56 0 0 0 16 6.5 5.5 5.5 0 0 0 5.207 5.021C5.137 5.017 5.071 5 5 5a4 4 0 0 0 0 8h2.167M10 15V6m0 0L8 8m2-2 2 2"/>
+          </svg>
+          <p class="mb-2 text-sm text-gray-500"><span class="font-semibold">Click to upload</span> or drag and drop</p>
+          <p class="text-xs text-gray-500">.XLSX files only</p>
+          @if (file) {
+            <p class="mt-2 font-medium text-blue-600">Selected: {{ file.name }}</p>
+          }        </div>
+        <input id="dropzone-file" type="file" accept=".xlsx" class="hidden" (change)="onFileSelected($event)" />
+      </label>
+    </div>
+
+    <button 
+      type="submit" 
+      [disabled]="!file || isUploading()"
+      class="w-full text-white bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-3 focus:outline-none disabled:bg-gray-400 disabled:cursor-not-allowed transition flex justify-center items-center"
+    >
+      @if (isUploading()) {
+        <span class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></span>
+        Uploading...
+      } @else {
+        Upload
+      }
+    </button>
+  </form>
+
+  @if (message()) {
+    <div [class]="isSuccess() ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'" class="mt-6 p-4 rounded-lg font-medium">
+      {{ message() }}
+    </div>
+  }
+</div>

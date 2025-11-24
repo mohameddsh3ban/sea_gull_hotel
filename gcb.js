@@ -6,8 +6,9 @@ const path = require("path");
 // --- Configuration ---
 const ROOT_DIRS = 
 [
-  "frontend",
-  "backend",
+  // "frontend",
+  // "backend",
+  "hotel-reservation"
 ];
 const OUTPUT_FILE = "codebase.txt";
 const IGNORE_PATTERNS = [
