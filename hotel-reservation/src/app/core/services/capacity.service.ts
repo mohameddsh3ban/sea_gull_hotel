@@ -9,7 +9,7 @@ import { CapacityData } from '../models/reservation.model';
   providedIn: 'root',
 })
 export class CapacityService {
-  private apiUrl = `${environment.apiUrl}/capacities`;
+  private apiUrl = `${environment.apiUrl}/api/v1/capacities`;
 
   private loadingSignal = signal<boolean>(false);
   loading = this.loadingSignal.asReadonly();

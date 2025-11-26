@@ -4,12 +4,10 @@ import { HttpClient } from '@angular/common/http';
 import { BaseChartDirective } from 'ng2-charts';
 import { ChartConfiguration, ChartOptions } from 'chart.js';
 import { environment } from '../../../../environments/environment';
-import { LoadingSpinner } from '../../../shared/components/loading-spinner/loading-spinner';
-
 @Component({
   selector: 'app-analytics',
   standalone: true,
-  imports: [CommonModule, BaseChartDirective, LoadingSpinner],
+  imports: [CommonModule],
   templateUrl: './analytics.html',
 })
 export class Analytics implements OnInit {

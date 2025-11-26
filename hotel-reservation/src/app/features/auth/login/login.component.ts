@@ -147,13 +147,16 @@ export class LoginComponent {
     this.isLoading.set(true);
     const { email, password } = this.form.value;
 
-    this.auth.login(email!, password!).subscribe({
-      next: ({ role }) => {
-        this.toast.success('Welcome back!');
+    // ✅ FIX: Pass as object
+    this.auth.login({ email: email!, password: password! }).subscribe({
+      next: () => {
+        // We don't get { role } directly from login anymore, 
+        // we get it from the authService.user signal
+        const user = this.auth.user(); 
+        const role = user?.role || 'student'; // Default fallback
         this.redirectBasedOnRole(role);
       },
       error: (err) => {
-        console.error(err);
         this.toast.error(err.message || 'Login failed');
         this.isLoading.set(false);
       },

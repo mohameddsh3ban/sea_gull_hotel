@@ -8,6 +8,8 @@ import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { provideAnimations } from '@angular/platform-browser/animations';
 import { initializeApp, provideFirebaseApp } from '@angular/fire/app';
 import { getAuth, provideAuth } from '@angular/fire/auth';
+import { AngularFireModule } from '@angular/fire/compat';
+import { AngularFireAuthModule } from '@angular/fire/compat/auth';
 import { TranslateModule, TranslateLoader } from '@ngx-translate/core';
 import { TranslateHttpLoader } from '@ngx-translate/http-loader';
 import { HttpClient } from '@angular/common/http';
@@ -32,6 +34,8 @@ export const appConfig: ApplicationConfig = {
     provideFirebaseApp(() => initializeApp(environment.firebase)),
     provideAuth(() => getAuth()),
     importProvidersFrom(
+      AngularFireModule.initializeApp(environment.firebase),
+      AngularFireAuthModule,
       TranslateModule.forRoot({
         defaultLanguage: 'en',
         loader: {
@@ -46,6 +50,6 @@ export const appConfig: ApplicationConfig = {
       positionClass: 'toast-top-right',
       preventDuplicates: true,
     }),
-    provideCharts(withDefaultRegisterables())
+    provideCharts(withDefaultRegisterables()),
   ],
 };

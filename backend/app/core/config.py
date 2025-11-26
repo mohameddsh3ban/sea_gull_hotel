@@ -1,3 +1,4 @@
+
 from pydantic_settings import BaseSettings
 from typing import List
 
@@ -17,7 +18,8 @@ class Settings(BaseSettings):
     # CORS
     ALLOWED_ORIGINS: List[str] = [
         "https://fir-restaurant-reservati-5ac70.web.app",
-        "http://localhost:5173"
+        "http://localhost:4200",
+        "http://localhost:3000"
     ]
     
     # Frontend
@@ -32,5 +34,6 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"  # <--- ADD THIS LINE
 
 settings = Settings()

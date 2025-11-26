@@ -8,6 +8,8 @@ from app.api.deps import require_role
 from app.services.email import send_review_request_email
 from app.services.firestore import get_db
 from app.core.config import settings
+from typing import Optional
+
 router = APIRouter()
 
 def generate_review_token():
@@ -110,3 +112,71 @@ async def submit_review(payload: dict):
     })
     
     return {"message": "Review submitted"}
+
+@router.get("/reviews/summary")
+async def get_reviews_summary(
+    restaurantId: str,
+    period_days: int = 30,
+    user: dict = Depends(require_role("admin"))
+):
+    """Get review statistics."""
+    db = get_db()
+    
+    # Calculate date range
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=period_days)
+    
+    # In a real app, you would filter by date field in Firestore
+    # For MVP, we will fetch and filter in memory or usage simple queries
+    docs = db.collection("restaurant_reviews")\
+        .where("restaurantId", "==", restaurantId)\
+        .stream()
+        
+    total_rating = 0
+    count = 0
+    histogram = {i: 0 for i in range(1, 11)}
+    
+    for doc in docs:
+        data = doc.to_dict()
+        # Ideally check date here
+        rating = data.get("rating", 0)
+        
+        total_rating += rating
+        count += 1
+        if 1 <= rating <= 10:
+            histogram[rating] += 1
+            
+    avg = (total_rating / count) if count > 0 else 0
+    
+    return {
+        "count": count,
+        "avg": round(avg, 1),
+        "histogram": histogram
+    }
+
+@router.get("/reviews/log")
+async def get_reviews_log(
+    restaurantId: str,
+    limit: int = 10,
+    user: dict = Depends(require_role("admin"))
+):
+    """Get recent reviews."""
+    db = get_db()
+    
+    query = db.collection("restaurant_reviews")\
+        .where("restaurantId", "==", restaurantId)\
+        .order_by("createdAt", direction=firestore.Query.DESCENDING)\
+        .limit(int(limit))
+        
+    docs = query.stream()
+    
+    items = []
+    for doc in docs:
+        data = doc.to_dict()
+        data['id'] = doc.id
+        # Convert timestamp to string for JSON
+        if data.get('createdAt'):
+            data['createdAt'] = data['createdAt'].isoformat()
+        items.append(data)
+        
+    return {"items": items}

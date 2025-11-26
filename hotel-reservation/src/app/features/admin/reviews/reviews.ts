@@ -32,7 +32,7 @@ export class Reviews implements OnInit {
 
   loadData() {
     this.loading.set(true);
-    const apiUrl = `${environment.apiUrl}/api`;
+    const apiUrl = `${environment.apiUrl}/api/v1`;
 
     // 1. Get Summary
     const summaryReq = this.http.get(`${apiUrl}/reviews/summary?restaurantId=${this.restaurantId}&period_days=${this.periodDays}`);

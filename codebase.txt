@@ -1,4 +1,2020 @@
 // =================================================================================
+// File: backend/app/api/deps.py
+// =================================================================================
+
+
+from fastapi import Depends, HTTPException, Header
+from firebase_admin import auth as admin_auth
+from typing import Optional
+
+async def get_current_user(authorization: Optional[str] = Header(None)):
+    """Verify Firebase ID token from Authorization header."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or invalid Authorization header"
+        )
+    
+    id_token = authorization.split(" ", 1)[1]
+    
+    try:
+        decoded = admin_auth.verify_id_token(id_token, check_revoked=True)
+        return {
+            "uid": decoded.get("uid"),
+            "email": decoded.get("email"),
+            "role": decoded.get("role", decoded.get("claims", {}).get("role", "guest"))
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=401,
+            detail=f"Invalid token: {str(e)}"
+        )
+
+def require_role(*allowed_roles: str):
+    """Dependency to enforce role-based access."""
+    async def role_checker(user: dict = Depends(get_current_user)):
+        if allowed_roles and user["role"] not in allowed_roles:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access denied. Required roles: {allowed_roles}"
+            )
+        return user
+    return role_checker
+
+
+// =================================================================================
+// File: backend/app/api/v1/api_router.py
+// =================================================================================
+
+
+from fastapi import APIRouter
+
+from app.api.v1.endpoints import reservations
+from app.api.v1.endpoints import capacities
+from app.api.v1.endpoints import reviews
+from app.api.v1.endpoints import admin
+from app.api.v1.endpoints import auth
+from app.api.v1.endpoints import config
+
+api_router = APIRouter()
+api_router.include_router(reservations.router, tags=["reservations"])
+api_router.include_router(capacities.router, tags=["capacities"])
+api_router.include_router(reviews.router, tags=["reviews"])
+api_router.include_router(admin.router, tags=["admin"])
+api_router.include_router(auth.router, tags=["auth"])
+api_router.include_router(config.router, tags=["config"])
+
+
+// =================================================================================
+// File: backend/app/api/v1/endpoints/admin.py
+// =================================================================================
+
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from firebase_admin import firestore
+from google.cloud.firestore_v1 import SERVER_TIMESTAMP
+from datetime import datetime, time as dt_time, timezone
+
+from app.api.deps import require_role
+from app.services.firestore import get_db
+from app.core.config import settings
+import pandas as pd
+from datetime import datetime, timedelta
+# ... existing imports
+
+router = APIRouter()
+
+@router.get("/analytics/dashboard")
+async def get_analytics_dashboard(
+    user: dict = Depends(require_role("admin"))
+):
+    """
+    Aggregates stats for the last 30 days:
+    - Total Revenue (Upsells)
+    - Total Covers (Guests)
+    - Occupancy Rates
+    - Daily Trends
+    """
+    db = get_db()
+    
+    # Date Range: Last 30 Days
+    today = datetime.now()
+    start_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+    end_date = today.strftime("%Y-%m-%d")
+
+    # 1. Fetch Reservations
+    res_docs = db.collection("reservations") \
+        .where("date", ">=", start_date) \
+        .where("status", "==", "confirmed") \
+        .stream()
+
+    total_revenue = 0.0
+    total_guests = 0
+    reservations_by_date = {} # { "2023-10-01": 12, ... }
+    revenue_by_date = {}
+
+    for doc in res_docs:
+        data = doc.to_dict()
+        d_date = data.get("date")
+        guests = int(data.get("guests", 0))
+        rev = float(data.get("upsell_total_price", 0.0))
+
+        total_guests += guests
+        total_revenue += rev
+
+        # Aggregate for Charts
+        reservations_by_date[d_date] = reservations_by_date.get(d_date, 0) + guests
+        revenue_by_date[d_date] = revenue_by_date.get(d_date, 0.0) + rev
+
+    # 2. Fetch Capacities (for Occupancy)
+    # We only care about the next 7 days for occupancy forecast
+    forecast_end = (today + timedelta(days=7)).strftime("%Y-%m-%d")
+    cap_docs = db.collection("capacities") \
+        .where("date", ">=", end_date) \
+        .where("date", "<=", forecast_end) \
+        .stream()
+    
+    occupancy_data = []
+    
+    for doc in cap_docs:
+        data = doc.to_dict()
+        cap = data.get("capacity", 0)
+        res = data.get("reserved_guests", 0)
+        pct = (res / cap * 100) if cap > 0 else 0
+        
+        occupancy_data.append({
+            "date": data.get("date"),
+            "restaurant": data.get("restaurant"),
+            "occupancy": round(pct, 1),
+            "reserved": res,
+            "capacity": cap
+        })
+
+    # 3. Format Chart Data (Timeline)
+    chart_data = []
+    # Fill in last 30 days
+    for i in range(30):
+        d = (today - timedelta(days=30 - i)).strftime("%Y-%m-%d")
+        chart_data.append({
+            "date": d,
+            "guests": reservations_by_date.get(d, 0),
+            "revenue": revenue_by_date.get(d, 0)
+        })
+
+    return {
+        "kpi": {
+            "total_revenue": round(total_revenue, 2),
+            "total_guests": total_guests,
+            "reservation_count": len(chart_data) # roughly
+        },
+        "charts": {
+            "timeline": chart_data,
+            "occupancy": occupancy_data
+        }
+    }
+
+@router.patch("/reservations/{reservation_id}/payment")
+async def update_payment_status(
+    reservation_id: str,
+    payload: dict,
+    user: dict = Depends(require_role("reception", "admin"))
+):
+    """Update payment status."""
+    db = get_db()
+    
+    if "paid" not in payload:
+        raise HTTPException(status_code=400, detail="Field 'paid' is required")
+    
+    doc_ref = db.collection("reservations").document(reservation_id)
+    
+    if not doc_ref.get().exists:
+        raise HTTPException(status_code=404, detail="Reservation not found")
+    
+    doc_ref.update({
+        "paid": bool(payload["paid"]),
+        "payment_updated_at": SERVER_TIMESTAMP,
+        "payment_updated_by": user.get("uid")
+    })
+    
+    return {"message": "Payment status updated"}
+
+@router.post("/cancel-reservation-admin/{reservation_id}")
+async def cancel_reservation_admin(
+    reservation_id: str,
+    user: dict = Depends(require_role("admin"))
+):
+    """Admin-initiated cancellation of a reservation."""
+    db = get_db()
+    
+    doc_ref = db.collection("reservations").document(reservation_id)
+    doc = doc_ref.get()
+    
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Reservation not found")
+    
+    data = doc.to_dict()
+    
+    # Update capacity
+    capacity_key = f"{data['restaurant']}_{data['date']}"
+    capacity_ref = db.collection("capacities").document(capacity_key)
+    
+    transaction = db.transaction()
+    
+    @firestore.transactional
+    def cancel_transaction(transaction):
+        capacity_doc = capacity_ref.get(transaction=transaction)
+        if capacity_doc.exists:
+            transaction.update(capacity_ref, {
+                "reserved_guests": firestore.Increment(-int(data.get("guests", 0)))
+            })
+        transaction.delete(doc_ref)
+    
+    cancel_transaction(transaction)
+    
+    return {"message": "Reservation cancelled by admin"}
+
+@router.post("/upload-guestlist")
+async def upload_guest_list(
+    file: UploadFile = File(...),
+    user: dict = Depends(require_role("admin", "reception"))
+):
+    """
+    Parses an Excel file (Room, Last Name, VIP Level) and stores it in Firestore.
+    """
+    if not file.filename.endswith('.xlsx'):
+        raise HTTPException(status_code=400, detail="Invalid file type. Please upload .xlsx")
+
+    try:
+        # 1. Read Excel into Pandas DataFrame
+        content = await file.read()
+        df = pd.read_excel(io.BytesIO(content))
+        
+        # 2. Normalize Headers (ensure columns exist)
+        # Expected columns: 'Room', 'Last Name', 'VIP'
+        df.columns = [c.strip().lower().replace(' ', '_') for c in df.columns]
+        
+        required_cols = ['room', 'last_name']
+        if not all(col in df.columns for col in required_cols):
+            raise HTTPException(status_code=400, detail=f"Excel must contain columns: Room, Last Name. Found: {df.columns}")
+
+        db = get_db()
+        batch = db.batch()
+        count = 0
+        
+        # 3. Clear old list (Optional: strictly depends on if you want to replace or append)
+        # For a hotel, usually you replace the list daily. Deleting all is slow in Firestore.
+        # For MVP, we will just Overwrite existing rooms or add new ones.
+        
+        collection_ref = db.collection("guest_list")
+
+        for _, row in df.iterrows():
+            room_num = str(row['room']).strip()
+            last_name = str(row['last_name']).strip()
+            vip_level = str(row.get('vip', 'Standard')).strip() # Default to Standard if empty
+            
+            # Create a searchable document ID based on Room Number
+            # Logic: One room usually has one primary guest name we match against.
+            doc_ref = collection_ref.document(room_num)
+            
+            batch.set(doc_ref, {
+                "room": room_num,
+                "last_name": last_name,
+                "last_name_normalized": last_name.lower(), # Helper for case-insensitive match
+                "vip_level": vip_level,
+                "is_vip": vip_level.lower() not in ['standard', 'nan', 'none', '']
+            })
+            
+            count += 1
+            
+            # Firestore batches are limited to 500 ops
+            if count % 400 == 0:
+                batch.commit()
+                batch = db.batch()
+
+        if count % 400 != 0:
+            batch.commit()
+
+        return {"message": f"Successfully processed {count} guests."}
+
+    except Exception as e:
+        print(f"Upload error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+// =================================================================================
+// File: backend/app/api/v1/endpoints/auth.py
+// =================================================================================
+
+
+
+from fastapi import APIRouter, Depends, HTTPException
+from firebase_admin import auth as admin_auth
+
+from app.api.deps import get_current_user, require_role
+
+router = APIRouter()
+
+# REMOVE THE "/token" ENDPOINT AND ITS IMPORTS
+
+@router.get("/users/me")
+async def read_users_me(current_user: dict = Depends(get_current_user)):
+    """Get current user information."""
+    return current_user
+
+@router.post("/admin/set-user-role")
+async def set_user_role(
+    payload: dict,
+    admin_user: dict = Depends(require_role("admin"))
+):
+    """Set a user's custom role (admin only)."""
+    uid = payload.get("uid")
+    role = payload.get("role")
+    
+    if not uid or not role:
+        raise HTTPException(status_code=400, detail="UID and role are required")
+    
+    try:
+        admin_auth.set_custom_user_claims(uid, {"role": role})
+        return {"message": f"Role '{role}' set for user {uid}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to set role: {str(e)}")
+
+// =================================================================================
+// File: backend/app/api/v1/endpoints/capacities.py
+// =================================================================================
+
+
+from fastapi import APIRouter, Depends, HTTPException
+from firebase_admin import firestore
+from google.cloud.firestore_v1 import Increment
+from datetime import datetime, timedelta
+
+from app.api.deps import require_role
+from app.services.firestore import get_db
+
+router = APIRouter()
+
+@router.get("/capacities")
+async def get_capacities():
+    """Get all capacities with reserved counts."""
+    db = get_db()
+    
+    result = {}
+    docs = db.collection("capacities").stream()
+    
+    for doc in docs:
+        data = doc.to_dict()
+        key = f"{data['restaurant']}_{data['date']}"
+        result[key] = {
+            "capacity": data.get("capacity", 0),
+            "reserved_guests": data.get("reserved_guests", 0),
+            "available": data.get("capacity", 0) - data.get("reserved_guests", 0)
+        }
+    
+    return result
+
+@router.post("/capacities", dependencies=[Depends(require_role("admin"))])
+async def save_capacities(capacities: dict):
+    """Save capacities with validation."""
+    db = get_db()
+    
+    # Validate date range (only allow next 6 days)
+    today = datetime.today()
+    allowed_dates = [(today + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(6)]
+    
+    batch = db.batch()
+    
+    for key, value in capacities.items():
+        restaurant, date = key.split('_')
+        
+        if date not in allowed_dates:
+            continue
+        
+        new_capacity = int(value)
+        doc_ref = db.collection("capacities").document(key)
+        
+        # Check if we can safely update
+        doc = doc_ref.get()
+        if doc.exists:
+            current_data = doc.to_dict()
+            reserved = current_data.get("reserved_guests", 0)
+            
+            if new_capacity < reserved:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot reduce capacity for {restaurant} on {date}. "
+                           f"Already {reserved} guests reserved, cannot set to {new_capacity}."
+                )
+            
+            batch.update(doc_ref, {"capacity": new_capacity})
+        else:
+            batch.set(doc_ref, {
+                "restaurant": restaurant,
+                "date": date,
+                "capacity": new_capacity,
+                "reserved_guests": 0
+            })
+    
+    await batch.commit()
+    return {"message": "Capacities saved successfully"}
+
+
+// =================================================================================
+// File: backend/app/api/v1/endpoints/config.py
+// =================================================================================
+
+
+from fastapi import APIRouter, Depends, HTTPException
+from typing import List, Dict
+from app.api.deps import require_role
+from app.services.firestore import get_db
+from app.models.config import RestaurantConfig
+
+router = APIRouter()
+
+@router.get("/config", response_model=Dict[str, RestaurantConfig])
+async def get_configs():
+    """Get configurations for all restaurants (Public/Guest)."""
+    db = get_db()
+    docs = db.collection("restaurant_configs").stream()
+    
+    configs = {}
+    for doc in docs:
+        data = doc.to_dict()
+        configs[doc.id] = data
+        
+    return configs
+
+@router.post("/config", dependencies=[Depends(require_role("admin"))])
+async def update_config(config: RestaurantConfig):
+    """Update a specific restaurant configuration (Admin only)."""
+    db = get_db()
+    
+    # Store config using the restaurantId as the Document ID
+    doc_ref = db.collection("restaurant_configs").document(config.restaurantId)
+    doc_ref.set(config.model_dump())
+    
+    return {"message": "Configuration saved", "config": config}
+
+
+// =================================================================================
+// File: backend/app/api/v1/endpoints/reservations.py
+// =================================================================================
+
+
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from firebase_admin import firestore
+from google.cloud.firestore_v1 import SERVER_TIMESTAMP, Increment
+from typing import Dict
+import uuid
+from datetime import datetime
+from pydantic import BaseModel
+
+from app.models.reservation import (
+    ReservationCreate,
+    ReservationResponse,
+    ReservationFilter,
+    PaginatedReservations
+)
+from app.api.deps import get_current_user, require_role
+from app.services.email import send_confirmation_email
+from app.services.firestore import get_db
+from app.core.config import settings
+
+router = APIRouter()
+
+@router.post("/reservations", response_model=Dict[str, str])
+async def create_reservation(
+    data: ReservationCreate,
+    background_tasks: BackgroundTasks
+):
+    """Create a new reservation with VIP detection."""
+    db = get_db()
+    
+    # --- NEW: VIP DETECTION LOGIC ---
+    is_vip = False
+    vip_level = "Standard"
+    
+    # Check Guest List by Room Number
+    guest_ref = db.collection("guest_list").document(str(data.room).strip())
+    guest_doc = guest_ref.get()
+    
+    if guest_doc.exists:
+        guest_info = guest_doc.to_dict()
+        
+        # Verify Last Name matches (Case-insensitive)
+        stored_name = guest_info.get("last_name_normalized", "")
+        input_name = data.last_name.strip().lower()
+        
+        if stored_name == input_name:
+            is_vip = guest_info.get("is_vip", False)
+            vip_level = guest_info.get("vip_level", "Standard")
+    # --------------------------------
+    
+    # Generate cancel token
+    cancel_token = str(uuid.uuid4())
+    name = f"{data.first_name} {data.last_name}".strip()
+    
+    # Prepare reservation data (INCLUDE VIP FIELDS)
+    reservation_data = {
+        "name": name,
+        "first_name": data.first_name,
+        "last_name": data.last_name,
+        "email": data.email,
+        "room": data.room,
+        "date": data.date,
+        "time": data.time,
+        "guests": data.guests,
+        "restaurant": data.restaurant,
+        "restaurantId": data.restaurant,
+        "cancel_token": cancel_token,
+        "main_courses": data.main_courses,
+        "comments": data.comments or "",
+        "upsell_items": data.upsell_items,
+        "upsell_total_price": data.upsell_total_price,
+        "status": "confirmed",
+        "paid": False,
+        "email_status": "pending",
+        
+        # Save VIP status
+        "is_vip": is_vip,
+        "vip_level": vip_level,
+        
+        "created_at": SERVER_TIMESTAMP
+    }
+    
+    capacity_key = f"{data.restaurant}_{data.date}"
+    capacity_ref = db.collection("capacities").document(capacity_key)
+    new_reservation_ref = db.collection("reservations").document()
+    
+    @firestore.async_transactional
+    async def create_reservation_transaction(transaction, db_client):
+        capacity_doc = await capacity_ref.get(transaction=transaction)
+        
+        if not capacity_doc.exists:
+            # Auto-create capacity if missing (optional, based on your preference)
+            # For strictness, assume it exists or raise error
+            raise ValueError(f"No capacity set for {data.restaurant} on {data.date}")
+            
+        capacity_data = capacity_doc.to_dict()
+        total_capacity = capacity_data.get("capacity", 0)
+        reserved_guests = capacity_data.get("reserved_guests", 0)
+        
+        if reserved_guests + data.guests > total_capacity:
+            remaining = max(0, total_capacity - reserved_guests)
+            raise ValueError(f"Only {remaining} seats available")
+        
+        transaction.update(capacity_ref, {
+            "reserved_guests": Increment(data.guests)
+        })
+        
+        transaction.set(new_reservation_ref, reservation_data)
+        return new_reservation_ref.id
+    
+    try:
+        reservation_id = await create_reservation_transaction(db.transaction(), db)
+        
+        # Queue email
+        background_tasks.add_task(
+            send_confirmation_email,
+            email=data.email,
+            name=name,
+            reservation_id=reservation_id,
+            **reservation_data
+        )
+        
+        return {"message": "Reservation confirmed", "reservation_id": reservation_id}
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+class ReservationUpdate(BaseModel):
+    date: str
+    time: str
+    guests: int
+    # We restrict modification to these fields for simplicity
+    # (changing restaurant requires cancelling and rebooking)
+
+@router.get("/reservations/{reservation_id}", response_model=ReservationResponse)
+async def get_reservation(
+    reservation_id: str,
+    user: dict = Depends(require_role("admin", "reception", "kitchen", "accounting"))
+):
+    """Fetch a single reservation by ID."""
+    db = get_db()
+    doc = db.collection("reservations").document(reservation_id).get()
+    
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Reservation not found")
+        
+    return ReservationResponse(id=doc.id, **doc.to_dict())
+
+
+@router.patch("/reservations/{reservation_id}")
+async def update_reservation(
+    reservation_id: str,
+    payload: ReservationUpdate,
+    background_tasks: BackgroundTasks, # <-- Inject this
+    user: dict = Depends(require_role("admin", "reception")) # Optional: restrict to staff or use guest token logic
+):
+    """
+    Modify a reservation and send confirmation email.
+    """
+    db = get_db()
+    res_ref = db.collection("reservations").document(reservation_id)
+    
+    @firestore.async_transactional
+    async def update_transaction(transaction, db_client):
+        res_doc = await res_ref.get(transaction=transaction)
+        if not res_doc.exists:
+            raise HTTPException(status_code=404, detail="Reservation not found")
+            
+        old_data = res_doc.to_dict()
+        restaurant = old_data.get('restaurant') or old_data.get('restaurantId')
+        old_date = old_data.get('date')
+        old_guests = int(old_data.get('guests'))
+        
+        new_date = payload.date
+        new_guests = payload.guests
+        
+        # 1. Capacity Logic (Swap dates if needed)
+        if old_date != new_date or old_guests != new_guests:
+            old_cap_ref = db.collection("capacities").document(f"{restaurant}_{old_date}")
+            new_cap_ref = db.collection("capacities").document(f"{restaurant}_{new_date}")
+            
+            new_cap_doc = await new_cap_ref.get(transaction=transaction)
+            
+            if not new_cap_doc.exists:
+                # Decide policy: Fail or Auto-create? Let's fail for safety in Admin mode
+                # Or you could allow it if you implement auto-capacity creation here
+                pass # Assuming capacity exists for simplicity
+                
+            # Basic decrement/increment logic
+            if old_date != new_date:
+                transaction.update(old_cap_ref, {"reserved_guests": firestore.Increment(-old_guests)})
+                transaction.update(new_cap_ref, {"reserved_guests": firestore.Increment(new_guests)})
+            else:
+                diff = new_guests - old_guests
+                transaction.update(new_cap_ref, {"reserved_guests": firestore.Increment(diff)})
+                
+        # 2. Update Reservation
+        transaction.update(res_ref, {
+            "date": new_date,
+            "time": payload.time,
+            "guests": new_guests,
+            "updated_at": SERVER_TIMESTAMP
+        })
+        
+        return old_data # Return old data to merge for email
+
+    try:
+        # Run transaction
+        old_data = await update_transaction(db.transaction(), db)
+        
+        # Merge old data with new payload for the email context
+        email_data = old_data.copy()
+        email_data.update({
+            "date": payload.date,
+            "time": payload.time,
+            "guests": payload.guests
+        })
+        
+        # Queue the email
+        background_tasks.add_task(
+            send_confirmation_email,
+            email=email_data['email'],
+            name=email_data['name'],
+            reservation_id=reservation_id,
+            **email_data
+        )
+        
+        return {"message": "Reservation updated and email sent"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/reservations", response_model=PaginatedReservations)
+async def list_reservations(
+    filters: ReservationFilter = Depends(),
+    user: dict = Depends(require_role("admin", "reception", "kitchen", "accounting"))
+):
+    """List reservations with server-side filtering and pagination."""
+    db = get_db()
+    
+    # Build query
+    query = db.collection("reservations")
+    
+    if filters.restaurant != "all":
+        query = query.where("restaurant", "==", filters.restaurant)
+    
+    if filters.date != "all":
+        query = query.where("date", "==", filters.date)
+    elif filters.from_date and filters.to_date:
+        query = query.where("date", ">=", filters.from_date).where("date", "<=", filters.to_date)
+    elif filters.from_date:
+        query = query.where("date", ">=", filters.from_date)
+    
+    query = query.order_by("date", direction=firestore.Query.DESCENDING)
+    
+    # Cursor-based pagination
+    if filters.last_id:
+        last_doc_ref = db.collection("reservations").document(filters.last_id)
+        last_doc = await last_doc_ref.get()
+        if last_doc.exists:
+            query = query.start_after(last_doc)
+    
+    # Apply limit
+    query = query.limit(filters.limit)
+    
+    # Execute query
+    docs = [doc async for doc in query.stream()]
+    
+    # In-memory search filter (if needed, as Firestore doesn't support full-text search)
+    if filters.search:
+        search_lower = filters.search.lower()
+        docs = [
+            doc for doc in docs
+            if search_lower in str(doc.to_dict().get("name", "")).lower()
+            or search_lower in str(doc.to_dict().get("room", "")).lower()
+        ]
+    
+    # Format
+    reservations = [
+        ReservationResponse(id=doc.id, **doc.to_dict())
+        for doc in docs
+    ]
+    
+    # Determine next_last_id for cursor-based pagination
+    next_last_id = reservations[-1].id if reservations else None
+    
+    # For total_items and total_pages, a separate count query would be needed for true server-side pagination.
+    # For simplicity, we'll return a basic pagination info.
+    return PaginatedReservations(
+        items=reservations,
+        pagination={
+            "current_page_items": len(reservations),
+            "per_page": filters.limit,
+            "next_last_id": next_last_id,
+            "has_next": len(docs) == filters.limit # If we got 'limit' items, there might be more
+        }
+    )
+
+@router.delete("/reservations/{reservation_id}")
+async def cancel_reservation(
+    reservation_id: str,
+    user: dict = Depends(require_role("admin"))
+):
+    """Cancel a reservation (admin only)."""
+    db = get_db()
+    
+    doc_ref = db.collection("reservations").document(reservation_id)
+    doc = doc_ref.get()
+    
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Reservation not found")
+    
+    data = doc.to_dict()
+    
+    # Update capacity
+    capacity_key = f"{data['restaurant']}_{data['date']}"
+    capacity_ref = db.collection("capacities").document(capacity_key)
+    
+    transaction = db.transaction()
+    
+    @firestore.transactional
+    def cancel_transaction(transaction):
+        capacity_doc = capacity_ref.get(transaction=transaction)
+        if capacity_doc.exists:
+            transaction.update(capacity_ref, {
+                "reserved_guests": Increment(-int(data.get("guests", 0)))
+            })
+        transaction.delete(doc_ref)
+    
+    cancel_transaction(transaction)
+    
+    return {"message": "Reservation cancelled"}
+
+
+// =================================================================================
+// File: backend/app/api/v1/endpoints/reviews.py
+// =================================================================================
+
+
+from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
+from firebase_admin import firestore
+from google.cloud.firestore_v1 import SERVER_TIMESTAMP
+from datetime import datetime, timedelta, time as dt_time
+import secrets
+
+from app.api.deps import require_role
+from app.services.email import send_review_request_email
+from app.services.firestore import get_db
+from app.core.config import settings
+router = APIRouter()
+
+def generate_review_token():
+    return secrets.token_urlsafe(24)
+
+@router.post("/tasks/send-review-requests")
+async def send_review_requests(request: Request, background_tasks: BackgroundTasks):
+    """Cron job to send review emails for yesterday's reservations."""
+    # This endpoint should be protected by a cron secret or similar mechanism
+    # For now, we'll assume it's called internally or by a trusted cron service
+    # if not require_cron_secret():
+    #     raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    db = get_db()
+    
+    now_local = datetime.now(tz=settings.LOCAL_TIMEZONE)
+    yesterday = (now_local - timedelta(days=1)).date()
+    yesterday_str = yesterday.isoformat()
+    
+    query = (db.collection("reservations")
+        .where("status", "==", "confirmed")
+        .where("review.requestSent", "==", False)
+        .where("date", "==", yesterday_str))
+    
+    batch = db.batch()
+    sent = 0
+    failures = []
+    
+    for doc in query.stream():
+        data = doc.to_dict()
+        email = data.get("email")
+        name = data.get("name")
+        restaurant = data.get("restaurantId")
+        
+        if not email or not restaurant:
+            continue
+        
+        token = generate_review_token()
+        
+        try:
+            # Use background_tasks for sending email
+            background_tasks.add_task(send_review_request_email, email, name, restaurant, token)
+            batch.update(doc.reference, {
+                "review.requestSent": True,
+                "review.requestSentAt": SERVER_TIMESTAMP,
+                "review.token": token
+            })
+            sent += 1
+        except Exception as e:
+            failures.append({"id": doc.id, "error": str(e)})
+    
+    if sent > 0:
+        await batch.commit() # Use await for async batch commit
+    
+    return {"sent": sent, "failed": failures}
+
+@router.post("/reviews/submit")
+async def submit_review(payload: dict):
+    """Submit a review."""
+    db = get_db()
+    
+    token = payload.get("token")
+    rating = payload.get("rating")
+    comment = (payload.get("comment") or "").strip() or None
+    
+    if not token or not isinstance(rating, int) or rating < 1 or rating > 10:
+        raise HTTPException(status_code=400, detail="Invalid input")
+    
+    # Find reservation
+    res_query = db.collection("reservations").where("review.token", "==", token).limit(1)
+    res_docs = list(res_query.stream())
+    
+    if not res_docs:
+        raise HTTPException(status_code=404, detail="Invalid token")
+    
+    res_doc = res_docs[0]
+    res_data = res_doc.to_dict()
+    
+    # Check if already reviewed
+    if res_data.get("review", {}).get("received"):
+        return {"message": "Already reviewed"}
+    
+    # Save review
+    db.collection("restaurant_reviews").add({
+        "reservationId": res_doc.id,
+        "restaurantId": res_data.get("restaurantId"),
+        "rating": rating,
+        "comment": comment,
+        "createdAt": SERVER_TIMESTAMP,
+        "guestName": res_data.get("name"),
+        "guestEmail": res_data.get("email"),
+        "room": res_data.get("room"),
+        "dinnerDate": res_data.get("date")
+    })
+    
+    # Update reservation
+    res_doc.reference.update({
+        "review.received": True,
+        "review.receivedAt": SERVER_TIMESTAMP
+    })
+    
+    return {"message": "Review submitted"}
+
+
+// =================================================================================
+// File: backend/app/api/v1/endpoints/__init__.py
+// =================================================================================
+
+
+
+
+// =================================================================================
+// File: backend/app/api/v1/__init__.py
+// =================================================================================
+
+
+from .api_router import api_router
+
+
+// =================================================================================
+// File: backend/app/api/__init__.py
+// =================================================================================
+
+
+
+
+// =================================================================================
+// File: backend/app/core/config.py
+// =================================================================================
+
+
+
+from pydantic_settings import BaseSettings
+from typing import List
+
+class Settings(BaseSettings):
+    # Firebase
+    FIREBASE_STORAGE_BUCKET: str = "hotel-backend-87480.firebasestorage.app"
+    
+    # Email
+    MAILGUN_API_KEY: str
+    MAILGUN_DOMAIN: str
+    EMAIL_FROM: str = "reservations@{MAILGUN_DOMAIN}"
+    
+    # Security
+    ADMIN_SECRET: str
+    CRON_SECRET: str
+    
+    # CORS
+    ALLOWED_ORIGINS: List[str] = [
+        "https://fir-restaurant-reservati-5ac70.web.app",
+        "http://localhost:4200",
+        "http://localhost:3000"
+    ]
+    
+    # Frontend
+    FRONTEND_BASE_URL: str = "https://fir-restaurant-reservati-5ac70.web.app"
+    
+    # Timezone
+    LOCAL_TIMEZONE: str = "Africa/Cairo"
+    
+    # Rate Limiting
+    RATE_LIMIT_PER_MINUTE: int = 60
+    
+    class Config:
+        env_file = ".env"
+        case_sensitive = True
+        extra = "ignore"  # <--- ADD THIS LINE
+
+settings = Settings()
+
+// =================================================================================
+// File: backend/app/core/exceptions.py
+// =================================================================================
+
+
+from fastapi import HTTPException
+
+class AppException(HTTPException):
+    """Custom exception for application-specific errors."""
+    def __init__(self, status_code: int, message: str, detail: str = None):
+        super().__init__(status_code=status_code, detail=detail or message)
+        self.message = message
+        self.detail = detail
+
+
+// =================================================================================
+// File: backend/app/core/security.py
+// =================================================================================
+
+
+# This file can be used for security-related utilities,
+# such as password hashing, token generation, etc.
+# For now, Firebase Admin SDK handles most authentication.
+
+
+// =================================================================================
+// File: backend/app/core/__init__.py
+// =================================================================================
+
+
+
+
+// =================================================================================
+// File: backend/app/main.py
+// =================================================================================
+
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+import firebase_admin
+from firebase_admin import credentials
+import os
+from contextlib import asynccontextmanager
+
+from app.core.config import settings
+from app.core.exceptions import AppException
+from app.api.v1 import api_router
+# from prometheus_fastapi_instrumentator import Instrumentator
+
+# Lifespan context for startup/shutdown
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    print("🚀 Starting up FastAPI application...")
+    
+    # Initialize Firebase
+    cred = credentials.Certificate("service-account.json")
+    firebase_admin.initialize_app(cred, {
+        'storageBucket': settings.FIREBASE_STORAGE_BUCKET
+    })
+    print("✅ Firebase initialized")
+    
+    yield
+    
+    # Shutdown
+    print("⬇️ Shutting down...")
+
+# Initialize FastAPI
+app = FastAPI(
+    title="Restaurant Reservation API",
+    description="Scalable API for managing restaurant reservations",
+    version="2.0.0",
+    lifespan=lifespan
+)
+
+# Instrumentator().instrument(app).expose(app)
+
+# CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+# Custom exception handler
+@app.exception_handler(AppException)
+async def app_exception_handler(request: Request, exc: AppException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.message, "detail": exc.detail}
+    )
+
+# Include API routes
+app.include_router(api_router, prefix="/api/v1")
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "version": "2.0.0"}
+
+
+// =================================================================================
+// File: backend/app/models/auth.py
+// =================================================================================
+
+
+from pydantic import BaseModel, EmailStr, Field
+from typing import Optional
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    email: Optional[EmailStr] = None
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=6)
+
+// =================================================================================
+// File: backend/app/models/capacity.py
+// =================================================================================
+
+
+from pydantic import BaseModel, Field
+from typing import Optional
+
+class Capacity(BaseModel):
+    restaurant: str = Field(..., pattern="^(Indian|Chinese|Italian|Oriental)$")
+    date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    capacity: int = Field(..., ge=0)
+    reserved_guests: int = Field(0, ge=0)
+    
+    class Config:
+        from_attributes = True
+
+
+// =================================================================================
+// File: backend/app/models/config.py
+// =================================================================================
+
+
+from pydantic import BaseModel, Field
+from typing import Optional
+
+class RestaurantConfig(BaseModel):
+    restaurantId: str = Field(..., pattern="^(Indian|Chinese|Italian|Oriental)$")
+    isActive: bool = True
+    openingTime: str = Field("18:00", pattern=r"^\d{2}:\d{2}$")
+    closingTime: str = Field("22:00", pattern=r"^\d{2}:\d{2}$")
+    intervalMinutes: int = Field(30, ge=15, le=60)
+    
+    class Config:
+        from_attributes = True
+
+
+// =================================================================================
+// File: backend/app/models/reservation.py
+// =================================================================================
+
+
+from pydantic import BaseModel, EmailStr, Field, validator
+from typing import Optional, List, Dict
+from datetime import datetime
+
+class ReservationCreate(BaseModel):
+    date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    time: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+    guests: int = Field(..., ge=1, le=4)
+    room: str = Field(..., min_length=1, max_length=10)
+    first_name: str = Field(..., min_length=1, max_length=50)
+    last_name: str = Field(..., min_length=1, max_length=50)
+    email: EmailStr
+    restaurant: str = Field(..., pattern="^(Indian|Chinese|Italian|Oriental)$")
+    main_courses: Optional[List[str]] = []
+    comments: Optional[str] = Field(None, max_length=500)
+    upsell_items: Optional[Dict[str, int]] = {}
+    upsell_total_price: Optional[float] = 0.0
+    
+    @validator('main_courses')
+    def validate_main_courses(cls, v, values):
+        restaurant = values.get('restaurant', '').lower()
+        guests = values.get('guests', 0)
+        
+        if restaurant in ['chinese', 'indian', 'italian']:
+            if len(v) != guests:
+                raise ValueError(f"Must select {guests} main courses")
+            
+            allowed = {
+                'italian': {'quatro_formagi', 'chicken_pizza', 'petto_chicken'},
+                'indian': {'chicken', 'meat'},
+                'chinese': {'chicken', 'meat'}
+            }
+            
+            for course in v:
+                if course.lower() not in allowed.get(restaurant, set()):
+                    raise ValueError(f"Invalid course: {course}")
+        
+        return v
+    
+    @validator('upsell_items')
+    def validate_upsell(cls, v):
+        return {k.strip(): int(count) for k, count in v.items() if int(count) > 0}
+
+class ReservationResponse(BaseModel):
+    id: str
+    name: str
+    email: EmailStr
+    room: str
+    date: str
+    time: str
+    guests: int
+    restaurant: str
+    main_courses: List[str]
+    comments: Optional[str]
+    upsell_items: Dict[str, int]
+    upsell_total_price: float
+    status: str
+    paid: bool
+    email_status: str
+    cancel_token: str
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class ReservationFilter(BaseModel):
+    page: int = Field(1, ge=1)
+    limit: int = Field(50, ge=1, le=100)
+    restaurant: Optional[str] = "all"
+    date: Optional[str] = "all"
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
+    search: Optional[str] = None
+    last_id: Optional[str] = None # For cursor-based pagination
+
+class PaginatedReservations(BaseModel):
+    items: List[ReservationResponse]
+    pagination: Dict[str, int]
+
+
+// =================================================================================
+// File: backend/app/models/review.py
+// =================================================================================
+
+
+from pydantic import BaseModel, Field
+from typing import Optional
+from datetime import datetime
+
+class ReviewCreate(BaseModel):
+    token: str
+    rating: int = Field(..., ge=1, le=10)
+    comment: Optional[str] = Field(None, max_length=500)
+
+class ReviewResponse(BaseModel):
+    id: str
+    reservationId: str
+    restaurantId: str
+    rating: int
+    comment: Optional[str]
+    createdAt: datetime
+    guestName: Optional[str]
+    guestEmail: Optional[str]
+    room: Optional[str]
+    dinnerDate: Optional[str]
+    
+    class Config:
+        from_attributes = True
+
+
+// =================================================================================
+// File: backend/app/models/user.py
+// =================================================================================
+
+
+from pydantic import BaseModel, EmailStr
+from typing import Optional
+
+class UserBase(BaseModel):
+    email: EmailStr
+    
+class UserCreate(UserBase):
+    password: str
+
+class UserInDB(UserBase):
+    uid: str
+    role: str = "guest"
+    
+    class Config:
+        from_attributes = True
+
+
+// =================================================================================
+// File: backend/app/models/__init__.py
+// =================================================================================
+
+
+
+
+// =================================================================================
+// File: backend/app/services/auth.py
+// =================================================================================
+
+
+from firebase_admin import auth as admin_auth
+from firebase_admin.auth import UserNotFoundError, InvalidIdTokenError
+from fastapi import HTTPException
+
+async def authenticate_user(email: str, password: str):
+    """
+    Authenticates a user using Firebase Admin SDK.
+    This function attempts to sign in a user with email and password.
+    Note: Firebase Admin SDK does not directly support email/password sign-in.
+    This is a placeholder for a more complete authentication flow,
+    which would typically involve a client-side Firebase SDK call to sign in,
+    and then sending the ID token to the backend for verification.
+    For demonstration purposes, we'll simulate a successful authentication
+    if the email and password match a predefined admin user or if a custom token
+    is generated.
+    """
+    # In a real application, you would typically use the Firebase Client SDK
+    # on the frontend to sign in the user with email/password,
+    # then send the resulting ID token to this backend for verification.
+    # The Firebase Admin SDK is primarily for server-side user management and token verification.
+
+    # For now, we'll simulate a basic check or assume a custom token flow.
+    # This part needs to be adapted based on your actual Firebase authentication strategy.
+    try:
+        # Attempt to get user by email to check existence
+        user_record = admin_auth.get_user_by_email(email)
+        
+        # In a real scenario, you would verify the password here.
+        # Since Firebase Admin SDK doesn't expose password verification directly,
+        # this is a simplification.
+        # A more robust solution would involve:
+        # 1. Frontend signs in with Firebase Client SDK (email/password).
+        # 2. Frontend sends the Firebase ID Token to this backend.
+        # 3. Backend verifies the ID Token using admin_auth.verify_id_token.
+        
+        # For this example, we'll assume if the user exists and a password is provided,
+        # it's a valid authentication for generating a custom token.
+        # This is NOT secure for production password verification.
+        if user_record and password: # Simplified check
+            return {"uid": user_record.uid, "email": user_record.email, "role": "admin"} # Assuming admin for simplicity
+        
+    except UserNotFoundError:
+        return None # User not found
+    except Exception as e:
+        # Log the error for debugging
+        print(f"Authentication error: {e}")
+        raise HTTPException(status_code=500, detail="Authentication service error")
+    
+    return None # Default to no user if no match or error
+
+
+// =================================================================================
+// File: backend/app/services/email.py
+// =================================================================================
+
+
+import requests
+import asyncio # Import asyncio for async operations
+from app.core.config import settings
+from firebase_admin import firestore
+from google.cloud.firestore_v1 import SERVER_TIMESTAMP
+
+def build_email_html(name: str, **kwargs) -> str:
+    """Build HTML email template."""
+    date = kwargs.get('date', '')
+    time = kwargs.get('time', '')
+    guests = kwargs.get('guests', 0)
+    room = kwargs.get('room', '')
+    restaurant = kwargs.get('restaurant', '')
+    cancel_token = kwargs.get('cancel_token', '')
+    main_courses = kwargs.get('main_courses', [])
+    upsell_items = kwargs.get('upsell_items', {})
+    upsell_total_price = kwargs.get('upsell_total_price', 0)
+
+    main_course_html = ""
+    if restaurant.lower() in ['chinese', 'indian', 'italian'] and main_courses:
+        def display_course(c):
+            if c.strip().lower() == 'petto_chicken':
+                return "Petto di Pollo (Chicken Breast)"
+            elif c.strip().lower() == 'quatro_formagi':
+                return "Quattro Formaggi"
+            elif c.strip().lower() == 'chicken_pizza':
+                return "Chicken Pizza"
+            return c.replace('_', ' ').title()
+
+        course_list_html = "<ul style='margin-top: 4px; padding-left: 20px;'>"
+        for i, course in enumerate(main_courses, 1):
+            course_list_html += f"<li>Guest {i}: {display_course(course)}</li>"
+        course_list_html += "</ul>"
+        main_course_html = f"<p><strong>🍽 Main Course(s):</strong> {course_list_html}</p>"
+
+    sushi_html = ""
+    if upsell_items:
+        sushi_list_html = "<ul style='margin-top: 4px; padding-left: 20px;'>"
+        for item_name, qty in upsell_items.items():
+            if qty > 0:
+                sushi_list_html += f"<li>{item_name} × {qty}</li>"
+        sushi_list_html += "</ul>"
+        sushi_html = f"<p><strong>🍣 Sushi Order:</strong> {sushi_list_html}</p>"
+        if upsell_total_price and upsell_total_price > 0:
+            sushi_html += f"<p><strong>💰 Sushi Total:</strong> ${upsell_total_price:.2f}</p>"
+
+    html_content = f"""
+    <html>
+      <body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px;">
+        <h1 style="text-align: center; color: #333;">Reservation Confirmation</h1>
+        <div style="max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 8px;">
+          <p>Hello <strong>{name}</strong>,</p>
+          <p>Thank you for booking a table at <strong>Seagull Restaurants</strong>!</p>
+          <hr style="margin: 20px 0;">
+          <p><strong>🍽 Restaurant:</strong> {restaurant.capitalize()}</p>
+          <p><strong>🔢 Room:</strong> {room}</p>
+          <p><strong>🗓 Date:</strong> {date}</p>
+          <p><strong>⏰ Time:</strong> {time}</p>
+          {main_course_html}
+          {sushi_html}
+          <p><strong>👥 Guests:</strong> {guests}</p>
+          <hr style="margin: 20px 0;">
+          <p>We look forward to serving you.</p>
+          <p style="margin-top: 20px;">
+            If you need to cancel your reservation, click below:<br>
+            <a href="{settings.FRONTEND_BASE_URL}/cancel/{cancel_token}" style="color: #d9534f;">
+              Cancel Reservation
+            </a>
+          </p>
+        </div>
+      </body>
+    </html>
+    """
+    return html_content
+
+async def send_confirmation_email(
+    email: str,
+    name: str,
+    reservation_id: str,
+    **kwargs
+):
+    """Send confirmation email via Mailgun with retry."""
+    max_retries = 3
+    db = firestore.client()
+    
+    for attempt in range(max_retries):
+        try:
+            html_content = build_email_html(name=name, **kwargs)
+            
+            # Simulate async operation
+            await asyncio.sleep(1) 
+            
+            response = requests.post(
+                f"https://api.mailgun.net/v3/{settings.MAILGUN_DOMAIN}/messages",
+                auth=("api", settings.MAILGUN_API_KEY),
+                data={
+                    "from": f"Seagull Restaurant <{settings.EMAIL_FROM}>",
+                    "to": [email],
+                    "subject": "Reservation Confirmation",
+                    "html": html_content
+                },
+                timeout=30
+            )
+            response.raise_for_status()
+            
+            # Update status
+            db.collection("reservations").document(reservation_id).update({
+                "email_status": "sent",
+                "email_sent_at": SERVER_TIMESTAMP
+            })
+            
+            return True
+            
+        except Exception as e:
+            if attempt == max_retries - 1:
+                # Final failure
+                db.collection("reservations").document(reservation_id).update({
+                    "email_status": "failed",
+                    "email_error": str(e)
+                })
+                return False
+
+async def send_review_request_email(to_email, guest_name, restaurant, token):
+    """Send review request email."""
+    review_url = f"{settings.FRONTEND_BASE_URL}/review/{token}"
+    html_content = f"""
+    <html>
+      <body style="font-family: Arial, sans-serif; padding: 20px;">
+        <div style="max-width: 640px; margin: auto; background: #ffffff; padding: 24px; border-radius: 12px;">
+          <h2 style="color: #0C6DAE;">How was your dinner at {restaurant} Restaurant?</h2>
+          <p>Hello {guest_name if guest_name else 'Guest'},</p>
+          <p>We'd love a quick 1–10 rating of your experience.</p>
+          <p>
+            <a href="{review_url}" style="display:inline-block; padding:12px 18px; border-radius:8px; background:#0C6DAE; color:#fff; text-decoration:none;">
+              Rate your dinner
+            </a>
+          </p>
+        </div>
+      </body>
+    </html>
+    """
+    
+    # Simulate async operation
+    await asyncio.sleep(1)
+    
+    response = requests.post(
+        f"https://api.mailgun.net/v3/{settings.MAILGUN_DOMAIN}/messages",
+        auth=("api", settings.MAILGUN_API_KEY),
+        data={
+            "from": f"Seagull Reviews <reviews@{settings.MAILGUN_DOMAIN}>",
+            "to": [to_email],
+            "subject": f"Rate your {restaurant} dinner",
+            "html": html_content
+        },
+        timeout=15
+    )
+    response.raise_for_status()
+
+
+// =================================================================================
+// File: backend/app/services/firestore.py
+// =================================================================================
+
+
+from firebase_admin import firestore
+
+_db_client = None
+
+def get_db():
+    """Returns the Firestore client instance."""
+    global _db_client
+    if _db_client is None:
+        _db_client = firestore.client()
+    return _db_client
+
+
+// =================================================================================
+// File: backend/app/services/__init__.py
+// =================================================================================
+
+
+
+
+// =================================================================================
+// File: backend/app/utils/datetime.py
+// =================================================================================
+
+
+from datetime import datetime, timedelta, timezone, time as dt_time
+from dateutil import tz
+
+def get_local_timezone(timezone_str: str = "Africa/Cairo"):
+    """Returns a timezone object for the given string."""
+    return tz.gettz(timezone_str)
+
+def get_utc_now():
+    """Returns the current UTC datetime."""
+    return datetime.now(timezone.utc)
+
+def get_local_now(timezone_str: str = "Africa/Cairo"):
+    """Returns the current local datetime."""
+    return datetime.now(tz=get_local_timezone(timezone_str))
+
+def parse_date_time_local(date_str: str, time_str: str, timezone_str: str = "Africa/Cairo"):
+    """Parses date and time strings into a timezone-aware local datetime."""
+    year, month, day = map(int, date_str.split("-"))
+    hour, minute = map(int, time_str.split(":"))
+    local_tz = get_local_timezone(timezone_str)
+    return datetime(year, month, day, hour, minute, tzinfo=local_tz)
+
+
+// =================================================================================
+// File: backend/app/utils/__init__.py
+// =================================================================================
+
+
+
+
+// =================================================================================
+// File: backend/app/__init__.py
+// =================================================================================
+
+
+
+
+// =================================================================================
+// File: backend/check_encoding.py
+// =================================================================================
+
+
+import base64
+import json
+import os
+
+# Path to your service account JSON file
+file_path = "service-account.json"
+env_file_path = ".env"
+
+try:
+    # Step 1: Read the service-account.json file
+    with open(file_path, 'r', encoding='utf-8') as f:
+        json_content = f.read()
+    print("✅ Successfully read service-account.json with UTF-8 encoding.")
+
+    # Step 2: Encode the JSON content to base64
+    bytes_content = json_content.encode('utf-8')
+    base64_string = base64.b64encode(bytes_content).decode('utf-8')
+    print("✅ Successfully base64 encoded the content.")
+    print(f"Generated Base64 string:\n{base64_string}")
+
+    # Step 3: Read the .env file and extract the existing base64 string
+    with open(env_file_path, 'r', encoding='utf-8') as f:
+        env_content = f.read()
+
+    env_base64_string = None
+    for line in env_content.splitlines():
+        if line.startswith("FIREBASE_CREDENTIALS_B64="):
+            env_base64_string = line.split('=', 1)[1].strip().strip('"')
+            break
+    
+    if env_base64_string:
+        print(f"Base64 string from .env (first 50 chars): {env_base64_string[:50]}...")
+        if base64_string == env_base64_string:
+            print("✅ Generated Base64 string matches the one in .env.")
+        else:
+            print("❌ Generated Base64 string DOES NOT match the one in .env.")
+            print("Please ensure the .env file is updated with the correct string.")
+    else:
+        print("❌ FIREBASE_CREDENTIALS_B64 not found in .env file.")
+
+    # Step 4: Decode the base64 string from .env and try to load as JSON
+    if env_base64_string:
+        decoded_bytes = base64.b64decode(env_base64_string)
+        decoded_json_str = decoded_bytes.decode('utf-8')
+        json_data = json.loads(decoded_json_str)
+        print("✅ Successfully base64 decoded and loaded JSON from .env string.")
+        print(f"Decoded JSON (first 100 chars): {decoded_json_str[:100]}...")
+
+except UnicodeDecodeError as e:
+    print(f"❌ UnicodeDecodeError during decoding: {e}")
+    print("This indicates the base64 string does not represent valid UTF-8 after decoding.")
+except json.JSONDecodeError as e:
+    print(f"❌ JSONDecodeError after decoding: {e}")
+    print("This indicates the decoded string is not valid JSON.")
+except FileNotFoundError:
+    print(f"❌ Error: {file_path} or {env_file_path} not found.")
+except Exception as e:
+    print(f"An unexpected error occurred: {e}")
+
+
+// =================================================================================
+// File: backend/requirements.txt
+// =================================================================================
+
+
+# FastAPI & ASGI
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.9
+
+# Pydantic
+pydantic>=2.10.0
+pydantic-settings==2.2.1
+pydantic-settings==2.2.1
+email-validator==2.1.1
+
+# Firebase
+firebase-admin==7.1.0
+
+# Other dependencies
+requests==2.32.5
+python-dotenv==1.1.1
+python-dateutil==2.9.0.post0
+
+# Testing (optional)
+pytest==8.1.1
+pytest-asyncio==0.23.6
+httpx==0.28.1
+
+# Development
+black==24.3.0
+ruff==0.3.4
+
+prometheus-fastapi-instrumentator==7.0.0
+
+// =================================================================================
+// File: backend/set_role.py
+// =================================================================================
+
+
+# set_admin.py
+import firebase_admin
+from firebase_admin import credentials, auth
+
+SERVICE_ACCOUNT = "service-account.json"
+UID = "lTwyjUVjZcX8biy7L1Q0m3jgSD53"  # <-- put the user's UID here
+
+def main():
+    cred = credentials.Certificate(SERVICE_ACCOUNT)
+    firebase_admin.initialize_app(cred)
+
+    # Set admin=true
+    # Preserve any existing claims and set role="admin"
+    u = auth.get_user(UID)
+    claims = (u.custom_claims or {}).copy()
+    claims["role"] = "admin"
+    auth.set_custom_user_claims(UID, claims)
+    print(f"✅ Admin claim set for UID: {UID}")
+
+    # (Optional) Force token refresh on next sign-in:
+    # auth.revoke_refresh_tokens(UID)
+    # print("🔁 Revoked refresh tokens to force claim refresh.")
+
+if __name__ == "__main__":
+    main()
+
+
+// =================================================================================
+// File: backend/tests/conftest.py
+// =================================================================================
+
+
+import pytest
+from httpx import AsyncClient
+from firebase_admin import credentials, initialize_app
+import os
+from unittest.mock import patch
+import sys
+
+@pytest.fixture(scope="session")
+def anyio_backend():
+    return "asyncio"
+
+@pytest.fixture(scope="session")
+async def client():
+    """
+    Returns an Asynchronous TestClient for the FastAPI application.
+    Mocks environment variables and Firebase initialization.
+    """
+    # Mock environment variables for settings
+    mock_env = {
+        "MAILGUN_API_KEY": "test-mailgun-api-key",
+        "MAILGUN_DOMAIN": "test-mailgun-domain.com",
+        "ADMIN_SECRET": "test-admin-secret",
+        "CRON_SECRET": "test-cron-secret",
+        "FIREBASE_STORAGE_BUCKET": "test-bucket",
+        "LOCAL_TIMEZONE": "UTC", # Ensure timezone is set for datetime operations
+        "FRONTEND_BASE_URL": "http://localhost:3000",
+        "ALLOWED_ORIGINS": "http://localhost:5173,http://localhost:3000"
+    }
+
+    with patch.dict(os.environ, mock_env):
+        # Clear app.core.config and app.main from sys.modules to force reload with mocked env vars
+        if "app.core.config" in sys.modules:
+            del sys.modules["app.core.config"]
+        if "app.main" in sys.modules:
+            del sys.modules["app.main"]
+        
+        # Re-import settings and app after mocking environment variables
+        from app.core.config import Settings
+        from app.main import app # Import app here, after env vars are mocked
+        
+        # Re-instantiate settings to pick up mocked environment variables
+        test_settings = Settings()
+        
+        with patch("app.core.config.settings", test_settings):
+            # Mock Firebase Admin SDK initialization
+            with patch("firebase_admin.initialize_app") as mock_initialize_app:
+                with patch("firebase_admin.credentials.Certificate"):
+                    async with AsyncClient(app=app, base_url="http://test") as client:
+                        yield client
+
+
+// =================================================================================
+// File: backend/tests/test_capacities.py
+// =================================================================================
+
+
+# Example test file for capacities
+
+
+// =================================================================================
+// File: backend/tests/test_reservations.py
+// =================================================================================
+
+
+import pytest
+from httpx import AsyncClient
+from unittest.mock import patch
+from firebase_admin import firestore
+from google.cloud.firestore_v1 import SERVER_TIMESTAMP
+from datetime import datetime, timedelta
+
+# Import your main FastAPI app and get_db for direct Firestore access in tests
+from app.main import app
+from app.services.firestore import get_db
+
+# Use the client fixture from conftest.py
+pytestmark = pytest.mark.anyio
+
+@pytest.fixture
+async def setup_capacity():
+    """Fixture to set up a known capacity for testing."""
+    db = get_db()
+    test_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    restaurant_id = "TestRestaurant"
+    capacity_key = f"{restaurant_id}_{test_date}"
+    
+    # Ensure a clean state
+    capacity_ref = db.collection("capacities").document(capacity_key)
+    await capacity_ref.set({
+        "restaurant": restaurant_id,
+        "date": test_date,
+        "capacity": 5, # Set a small capacity for testing overbooking
+        "reserved_guests": 0
+    })
+    
+    # Clean up reservations for the test date
+    reservations_query = db.collection("reservations").where("date", "==", test_date)
+    async for doc in reservations_query.stream():
+        await doc.reference.delete()
+
+    yield {
+        "test_date": test_date,
+        "restaurant_id": restaurant_id,
+        "initial_capacity": 5
+    }
+
+    # Clean up after test
+    await capacity_ref.delete()
+    async for doc in reservations_query.stream():
+        await doc.reference.delete()
+
+@patch("app.services.email.send_confirmation_email")
+async def test_create_reservation_success(mock_send_email, client: AsyncClient, setup_capacity):
+    """Test successful reservation creation."""
+    test_date = setup_capacity["test_date"]
+    restaurant_id = setup_capacity["restaurant_id"]
+
+    response = await client.post(
+        "/api/v1/reservations",
+        json={
+            "date": test_date,
+            "time": "19:00",
+            "guests": 2,
+            "room": "Room A",
+            "first_name": "John",
+            "last_name": "Doe",
+            "email": "john.doe@example.com",
+            "restaurant": restaurant_id,
+            "main_courses": [],
+            "upsell_items": {}
+        }
+    )
+    assert response.status_code == 200
+    assert "reservation_id" in response.json()
+    mock_send_email.assert_called_once()
+
+    db = get_db()
+    capacity_key = f"{restaurant_id}_{test_date}"
+    capacity_doc = await db.collection("capacities").document(capacity_key).get()
+    assert capacity_doc.exists
+    assert capacity_doc.to_dict()["reserved_guests"] == 2
+
+@patch("app.services.email.send_confirmation_email")
+async def test_create_reservation_overbooking(mock_send_email, client: AsyncClient, setup_capacity):
+    """Test reservation overbooking prevention with concurrent requests."""
+    test_date = setup_capacity["test_date"]
+    restaurant_id = setup_capacity["restaurant_id"]
+    initial_capacity = setup_capacity["initial_capacity"] # 5 guests
+
+    # Simulate more guests than capacity
+    num_guests_per_reservation = 3
+    num_concurrent_requests = 2 # Total guests: 2 * 3 = 6, which is > 5
+
+    reservation_data = {
+        "date": test_date,
+        "time": "19:00",
+        "guests": num_guests_per_reservation,
+        "room": "Room B",
+        "first_name": "Jane",
+        "last_name": "Doe",
+        "email": "jane.doe@example.com",
+        "restaurant": restaurant_id,
+        "main_courses": [],
+        "upsell_items": {}
+    }
+
+    # Create a list of concurrent tasks
+    tasks = [
+        client.post("/api/v1/reservations", json=reservation_data)
+        for _ in range(num_concurrent_requests)
+    ]
+
+    # Execute tasks concurrently
+    responses = await pytest.helpers.gather(*tasks, return_exceptions=True)
+
+    successful_reservations = 0
+    failed_reservations = 0
+
+    for res in responses:
+        if isinstance(res, Exception):
+            # Handle exceptions if any, though httpx usually returns Response objects
+            failed_reservations += 1
+        elif res.status_code == 200:
+            successful_reservations += 1
+        else:
+            failed_reservations += 1
+            assert res.status_code == 400
+            assert "Restaurant fully booked" in res.json()["detail"] or "seats available" in res.json()["detail"]
+
+    # Assert that only one reservation succeeded (or none if capacity is too low for even one)
+    # Given initial_capacity=5 and num_guests_per_reservation=3, only one should succeed.
+    assert successful_reservations == 1
+    assert failed_reservations == num_concurrent_requests - 1
+
+    db = get_db()
+    capacity_key = f"{restaurant_id}_{test_date}"
+    capacity_doc = await db.collection("capacities").document(capacity_key).get()
+    assert capacity_doc.exists
+    # The reserved guests should be equal to the guests from the single successful reservation
+    assert capacity_doc.to_dict()["reserved_guests"] == num_guests_per_reservation
+    mock_send_email.assert_called_once() # Only one email should be sent for the successful booking
+
+# Add more tests for other reservation endpoints (list, delete, etc.)
+# For example:
+
+@patch("app.services.email.send_confirmation_email")
+async def test_list_reservations(mock_send_email, client: AsyncClient, setup_capacity):
+    """Test listing reservations with filters and pagination."""
+    test_date = setup_capacity["test_date"]
+    restaurant_id = setup_capacity["restaurant_id"]
+
+    # Create a few reservations
+    for i in range(3):
+        await client.post(
+            "/api/v1/reservations",
+            json={
+                "date": test_date,
+                "time": f"1{i}:00",
+                "guests": 1,
+                "room": f"Room {i}",
+                "first_name": f"Guest{i}",
+                "last_name": "Test",
+                "email": f"guest{i}@example.com",
+                "restaurant": restaurant_id,
+                "main_courses": [],
+                "upsell_items": {}
+            }
+        )
+    
+    # Test basic listing
+    response = await client.get(f"/api/v1/reservations?restaurant={restaurant_id}&date={test_date}")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["items"]) == 3
+    assert data["pagination"]["current_page_items"] == 3
+    assert data["pagination"]["has_next"] == False # Since limit is 50 by default
+
+    # Test pagination (assuming default limit is 50, set to 2 for this test)
+    response_page1 = await client.get(f"/api/v1/reservations?restaurant={restaurant_id}&date={test_date}&limit=2")
+    assert response_page1.status_code == 200
+    data_page1 = response_page1.json()
+    assert len(data_page1["items"]) == 2
+    assert data_page1["pagination"]["has_next"] == True
+    assert data_page1["pagination"]["next_last_id"] is not None
+
+    last_id = data_page1["pagination"]["next_last_id"]
+    response_page2 = await client.get(f"/api/v1/reservations?restaurant={restaurant_id}&date={test_date}&limit=2&last_id={last_id}")
+    assert response_page2.status_code == 200
+    data_page2 = response_page2.json()
+    assert len(data_page2["items"]) == 1 # Only one remaining
+    assert data_page2["pagination"]["has_next"] == False
+
+@patch("app.services.email.send_confirmation_email")
+async def test_cancel_reservation(mock_send_email, client: AsyncClient, setup_capacity):
+    """Test cancelling a reservation."""
+    test_date = setup_capacity["test_date"]
+    restaurant_id = setup_capacity["restaurant_id"]
+
+    # First, create a reservation
+    create_response = await client.post(
+        "/api/v1/reservations",
+        json={
+            "date": test_date,
+            "time": "20:00",
+            "guests": 2,
+            "room": "Room C",
+            "first_name": "Cancel",
+            "last_name": "Me",
+            "email": "cancel.me@example.com",
+            "restaurant": restaurant_id,
+            "main_courses": [],
+            "upsell_items": {}
+        }
+    )
+    assert create_response.status_code == 200
+    reservation_id = create_response.json()["reservation_id"]
+
+    # Mock admin user for deletion
+    with patch("app.api.deps.get_current_user", return_value={"uid": "test_admin_uid", "email": "admin@example.com", "role": "admin"}):
+        delete_response = await client.delete(f"/api/v1/reservations/{reservation_id}")
+        assert delete_response.status_code == 200
+        assert delete_response.json()["message"] == "Reservation cancelled"
+
+    db = get_db()
+    deleted_doc = await db.collection("reservations").document(reservation_id).get()
+    assert not deleted_doc.exists
+
+    capacity_key = f"{restaurant_id}_{test_date}"
+    capacity_doc = await db.collection("capacities").document(capacity_key).get()
+    assert capacity_doc.exists
+    assert capacity_doc.to_dict()["reserved_guests"] == 0 # Capacity should be back to 0
+
+
+// =================================================================================
+// File: backend/tests/test_reviews.py
+// =================================================================================
+
+
+# Example test file for reviews
+
+
+// =================================================================================
+// File: backend/tests/__init__.py
+// =================================================================================
+
+
+
+
+// =================================================================================
 // File: hotel-reservation/.postcssrc.json
 // =================================================================================
 
@@ -283,36 +2299,39 @@ The foundation is solid. We can now start building the UI components with confid
   "private": true,
   "packageManager": "npm@11.4.2",
   "dependencies": {
-    "@angular/animations": "^21.0.0",
-    "@angular/common": "^21.0.0",
-    "@angular/compiler": "^21.0.0",
-    "@angular/core": "^21.0.0",
+    "@angular/animations": "^20.2.4",
+    "@angular/cdk": "^20.0.0",
+    "@angular/common": "^20.2.4",
+    "@angular/compiler": "^20.2.4",
+    "@angular/core": "^20.2.4",
     "@angular/fire": "^20.0.1",
-    "@angular/forms": "^21.0.0",
-    "@angular/platform-browser": "^21.0.0",
-    "@angular/router": "^21.0.0",
+    "@angular/forms": "^20.2.4",
+    "@angular/platform-browser": "^20.2.4",
+    "@angular/router": "^20.2.4",
     "@ngx-translate/core": "^17.0.0",
     "@ngx-translate/http-loader": "^17.0.0",
-    "@tailwindcss/postcss": "^4.1.17",
-    "chart.js": "^4.5.1",
-    "firebase": "^12.6.0",
+    "@tailwindcss/postcss": "^4.1.11",
+    "chart.js": "^4.5.0",
+    "firebase": "^11.0.0",
     "jspdf": "^3.0.4",
     "jspdf-autotable": "^5.0.2",
-    "lucide-angular": "^0.554.0",
+    "lucide-angular": "^0.555.0",
     "ng2-charts": "^8.0.0",
     "ngx-toastr": "^19.1.0",
     "postcss": "^8.5.6",
     "rxjs": "~7.8.0",
-    "tailwindcss": "^4.1.17",
-    "tslib": "^2.3.0"
+    "tailwindcss": "^4.1.11",
+    "tslib": "^2.3.0",
+    "zone.js": "~0.15.0"
   },
   "devDependencies": {
-    "@angular/build": "^21.0.0",
-    "@angular/cli": "^21.0.0",
-    "@angular/compiler-cli": "^21.0.0",
+    "@angular-devkit/build-angular": "^20.2.4",
+    "@angular/build": "^20.2.4",
+    "@angular/cli": "^20.2.2",
+    "@angular/compiler-cli": "^20.2.4",
     "jsdom": "^27.1.0",
     "typescript": "~5.9.2",
-    "vitest": "^4.0.8"
+    "vitest": "^3.0.0"
   }
 }
 
@@ -637,6 +2656,8 @@ import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { provideAnimations } from '@angular/platform-browser/animations';
 import { initializeApp, provideFirebaseApp } from '@angular/fire/app';
 import { getAuth, provideAuth } from '@angular/fire/auth';
+import { AngularFireModule } from '@angular/fire/compat';
+import { AngularFireAuthModule } from '@angular/fire/compat/auth';
 import { TranslateModule, TranslateLoader } from '@ngx-translate/core';
 import { TranslateHttpLoader } from '@ngx-translate/http-loader';
 import { HttpClient } from '@angular/common/http';
@@ -661,6 +2682,8 @@ export const appConfig: ApplicationConfig = {
     provideFirebaseApp(() => initializeApp(environment.firebase)),
     provideAuth(() => getAuth()),
     importProvidersFrom(
+      AngularFireModule.initializeApp(environment.firebase),
+      AngularFireAuthModule,
       TranslateModule.forRoot({
         defaultLanguage: 'en',
         loader: {
@@ -675,7 +2698,7 @@ export const appConfig: ApplicationConfig = {
       positionClass: 'toast-top-right',
       preventDuplicates: true,
     }),
-    provideCharts(withDefaultRegisterables())
+    provideCharts(withDefaultRegisterables()),
   ],
 };
 
@@ -1147,35 +3170,131 @@ export class App {
 
 
 // =================================================================================
+// File: hotel-reservation/src/app/core/guards/auth.guard.ts
+// =================================================================================
+
+
+import { inject } from '@angular/core';
+import { CanActivateFn, Router } from '@angular/router';
+import { AuthService } from '../services/auth.service';
+import { map, take, filter } from 'rxjs/operators';
+
+export const authGuard: CanActivateFn = (route, state) => {
+  const authService = inject(AuthService);
+  const router = inject(Router);
+
+  return authService.isLoading$.pipe(
+    // 1. Wait until the initial Firebase check is done
+    filter(loading => !loading),
+    take(1),
+    // 2. Synchronously check the result using the Signal or Subject
+    map(() => {
+      const isAuth = authService.isAuthenticated();
+      if (isAuth) {
+        return true;
+      }
+      // Not authenticated
+      console.log("AuthGuard: Not authenticated, redirecting to login");
+      return router.parseUrl('/auth/login');
+    })
+  );
+};
+
+
+// =================================================================================
+// File: hotel-reservation/src/app/core/guards/initial-redirect.guard.ts
+// =================================================================================
+
+
+import { inject } from "@angular/core";
+import { CanActivateFn, Router } from "@angular/router";
+import { AuthService } from "../services/auth.service";
+import { map, take, filter } from "rxjs/operators";
+
+export const initialRedirectGuard: CanActivateFn = (route, state) => {
+  const authService = inject(AuthService);
+  const router = inject(Router);
+
+  return authService.isLoading$.pipe(
+    filter(loading => !loading),
+    take(1),
+    map(() => {
+      const isAuth = authService.isAuthenticated();
+      if (isAuth) {
+        if (state.url === "" || state.url === "/") {
+          return router.parseUrl("/dashboard");
+        }
+      }
+      return true;
+    })
+  );
+};
+
+
+// =================================================================================
+// File: hotel-reservation/src/app/core/guards/public.guard.ts
+// =================================================================================
+
+
+import { inject } from '@angular/core';
+import { CanActivateFn, Router } from '@angular/router';
+import { AuthService } from '../services/auth.service';
+import { map, take, filter } from 'rxjs/operators';
+
+export const publicGuard: CanActivateFn = (route, state) => {
+  const authService = inject(AuthService);
+  const router = inject(Router);
+
+  return authService.isLoading$.pipe(
+    filter(loading => !loading),
+    take(1),
+    map(() => {
+      const isAuth = authService.isAuthenticated();
+      if (isAuth) {
+        // If user IS logged in, block access to login/register pages
+        return router.parseUrl('/dashboard');
+      }
+      // If user is NOT logged in, allow access
+      return true;
+    })
+  );
+};
+
+
+// =================================================================================
 // File: hotel-reservation/src/app/core/guards/role.guard.ts
 // =================================================================================
 
 
 import { inject } from '@angular/core';
-import { Router, CanActivateFn } from '@angular/router';
+import { CanActivateFn, Router } from '@angular/router';
 import { AuthService } from '../services/auth.service';
+import { map, take, filter, switchMap } from 'rxjs/operators';
 
-export const roleGuard: (allowedRoles: string[]) => CanActivateFn = (allowedRoles: string[]) => {
-  return async () => {
+export function roleGuard(allowedRoles: Array<'student' | 'teacher' | 'admin' | 'reception' | 'kitchen' | 'accounting'>): CanActivateFn {
+  return () => {
     const authService = inject(AuthService);
     const router = inject(Router);
 
-    const isAuthenticated = authService.isAuthenticated();
-
-    if (!isAuthenticated) {
-      return router.createUrlTree(['/login']);
-    }
-
-    const userRole = await authService.getUserRole();
-
-    if (!userRole || !allowedRoles.includes(userRole)) {
-      // Redirect to appropriate dashboard or show error
-      return router.createUrlTree(['/login']);
-    }
-
-    return true;
+    return authService.isLoading$.pipe(
+      filter(loading => !loading),
+      take(1),
+      switchMap(() => authService.user$),
+      take(1),
+      map(currentUser => {
+        if (!currentUser || !allowedRoles.includes(currentUser.role as 'student' | 'teacher' | 'admin' | 'reception' | 'kitchen' | 'accounting')) {
+          console.warn(`Role guard: Access denied.`);
+          // If user is missing (logged out), let AuthGuard handle the redirect usually,
+          // but if we are here, redirect to login or appropriate dashboard
+          if(!currentUser) return router.parseUrl('/auth/login');
+          // Assuming role specific dashboards exist like /admin, /reception etc.
+          return router.parseUrl(`/${currentUser.role}`);
+        }
+        return true;
+      })
+    );
   };
-};
+}
 
 
 // =================================================================================
@@ -1212,6 +3331,42 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
     })
   );
 };
+
+
+// =================================================================================
+// File: hotel-reservation/src/app/core/models/dto/complete-profile.dto.ts
+// =================================================================================
+
+
+export interface CompleteProfileDto {
+  name: string;
+  photoUrl?: string;
+  additionalInfo?: Record<string, any>;
+}
+
+
+// =================================================================================
+// File: hotel-reservation/src/app/core/models/dto/login.dto.ts
+// =================================================================================
+
+
+export interface LoginDto {
+  email: string;
+  password: string;
+}
+
+
+// =================================================================================
+// File: hotel-reservation/src/app/core/models/dto/register.dto.ts
+// =================================================================================
+
+
+export interface IRegisterPayload {
+  email: string;
+  password: string;
+  name: string;
+  role?: string;
+}
 
 
 // =================================================================================
@@ -1280,93 +3435,135 @@ export interface CapacityData {
 // =================================================================================
 
 
-import { Injectable, signal, computed } from '@angular/core';
-import {
-  Auth,
-  signInWithEmailAndPassword,
-  signOut,
-  User,
-  getIdTokenResult,
-} from '@angular/fire/auth';
 import { Router } from '@angular/router';
-import { from, Observable } from 'rxjs';
-import { switchMap } from 'rxjs/operators';
+import { AngularFireAuth } from '@angular/fire/compat/auth';
+import { Observable, from, of, throwError, timer, BehaviorSubject } from 'rxjs';
+import { environment } from '../../../environments/environment';
+// Remove RequestHandlerService from imports if not used elsewhere, or keep if used for register
+import { catchError, filter, finalize, map, switchMap, take, tap } from 'rxjs/operators';
+import { LoginDto } from '../models/dto/login.dto';
+import { IRegisterPayload } from '../models/dto/register.dto';
+import { NotificationService } from './notification.service';
+import { RequestHandlerService } from './request-handler.service';
+import { HttpClient } from '@angular/common/http';
+import { computed, inject, Injectable, Signal } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { UserService } from './user.service';
 
-export interface UserRole {
-  role: 'admin' | 'reception' | 'kitchen' | 'accounting' | null;
+export interface IAuthUser {
+  uid: string;
+  email: string | null;
+  name: string | null;
+  role?: string;
+  photoUrl?: string;
 }
 
 @Injectable({
   providedIn: 'root',
 })
 export class AuthService {
-  private currentUserSignal = signal<User | null>(null);
-  private userRoleSignal = signal<string | null>(null);
+  private afAuth = inject(AngularFireAuth);
+  private router = inject(Router);
+  private notificationService = inject(NotificationService);
+  private requestHandler = inject(RequestHandlerService);
+  private userService = inject(UserService);
+  
+  // ... (Keep Subjects and Signals as they were) ...
+  private currentUserSubject = new BehaviorSubject<IAuthUser | null>(null);
+  public readonly user$ = this.currentUserSubject.asObservable();
+  
+  private isLoadingSubject = new BehaviorSubject<boolean>(true);
+  public readonly isLoading$ = this.isLoadingSubject.asObservable();
 
-  currentUser = this.currentUserSignal.asReadonly();
-  userRole = this.userRoleSignal.asReadonly();
-  isAuthenticated = computed(() => this.currentUserSignal() !== null);
+  private _loginLoadingSubject = new BehaviorSubject<boolean>(false);
+  public readonly loginLoading$ = this._loginLoadingSubject.asObservable();
 
-  constructor(private auth: Auth, private router: Router) {
-    // Listen to auth state changes
-    this.auth.onAuthStateChanged(async (user) => {
-      this.currentUserSignal.set(user);
-      if (user) {
-        const role = await this.getUserRole();
-        this.userRoleSignal.set(role);
-      } else {
-        this.userRoleSignal.set(null);
-      }
+  public readonly user: Signal<IAuthUser | null>;
+  public readonly isAuthenticated: Signal<boolean>;
+
+  constructor() {
+    this.user = toSignal(this.user$, { initialValue: null });
+    this.isAuthenticated = computed(() => !!this.user());
+
+    // Subscribe to Firebase Auth State
+    this.afAuth.authState.pipe(
+      switchMap(async (firebaseUser) => {
+        if (firebaseUser) {
+          // Get the ID Token Result to find the Custom Claim 'role'
+          const tokenResult = await firebaseUser.getIdTokenResult();
+          const role = (tokenResult.claims['role'] as string) || 'guest';
+          
+          const user: IAuthUser = {
+            uid: firebaseUser.uid,
+            email: firebaseUser.email,
+            name: firebaseUser.displayName,
+            photoUrl: firebaseUser.photoURL || undefined,
+            role: role, // ✅ Actually get the role from Firebase
+          };
+          return user;
+        } else {
+          return null;
+        }
+      })
+    ).subscribe((user) => {
+      console.log('Auth State Changed:', user?.email || 'Logged Out', 'Role:', user?.role);
+      this.currentUserSubject.next(user);
+      this.isLoadingSubject.next(false);
     });
+    
+    // ... (Keep session check timer) ...
   }
 
-  /**
-   * Login with email and password
-   */
-  login(email: string, password: string): Observable<{ user: User; role: string }> {
-    return from(signInWithEmailAndPassword(this.auth, email, password)).pipe(
-      switchMap(async (credential) => {
-        const tokenResult = await getIdTokenResult(credential.user, true);
-        const role = (tokenResult.claims['role'] as string) || '';
-        this.userRoleSignal.set(role);
-        return { user: credential.user, role };
+  // ... (Keep waitForAuthReady) ...
+
+  // ✅ REFACTORED LOGIN
+  // We no longer call the backend here. We just sign in with Firebase.
+  // The authState subscription above handles setting the user state.
+  login(credentials: LoginDto): Observable<any> {
+    this._loginLoadingSubject.next(true);
+
+    return from(
+      this.afAuth.signInWithEmailAndPassword(credentials.email, credentials.password)
+    ).pipe(
+      tap(() => {
+        this.notificationService.showSuccess('Welcome Back!', 'You have successfully logged in.');
+      }),
+      catchError((err) => {
+        console.error(err);
+        // Map Firebase errors to user-friendly messages
+        let msg = 'Login failed';
+        if (err.code === 'auth/user-not-found') msg = 'User not found';
+        if (err.code === 'auth/wrong-password') msg = 'Invalid password';
+        if (err.code === 'auth/invalid-credential') msg = 'Invalid credentials';
+        return throwError(() => new Error(msg));
+      }),
+      finalize(() => {
+        this._loginLoadingSubject.next(false);
       })
     );
   }
 
-  /**
-   * Logout
-   */
-  async logout(): Promise<void> {
-    await signOut(this.auth);
-    this.currentUserSignal.set(null);
-    this.userRoleSignal.set(null);
-    this.router.navigate(['/login']);
+  logout() {
+    this._loginLoadingSubject.next(true);
+    // Just sign out of Firebase. No need to tell backend unless you do server-side session cookies.
+    this.afAuth.signOut().then(() => {
+      this._loginLoadingSubject.next(false);
+      this.router.navigate(['/auth/login']);
+      this.notificationService.showSuccess('Logged Out', 'You have been successfully logged out.');
+    });
   }
 
-  /**
-   * Get user role from Firebase custom claims
-   */
-  async getUserRole(): Promise<string | null> {
-    const user = this.auth.currentUser;
-    if (!user) return null;
-
-    try {
-      const tokenResult = await getIdTokenResult(user, true);
-      return (tokenResult.claims['role'] as string) || null;
-    } catch (error) {
-      console.error('Error getting user role:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Get Firebase ID token
-   */
-  async getIdToken(): Promise<string | null> {
-    const user = this.auth.currentUser;
-    if (!user) return null;
-    return await user.getIdToken();
+  // ... (Keep register and other methods) ...
+  
+  register(payload: IRegisterPayload): Observable<any> {
+    // Registration might still need to go to backend to set custom claims (roles)
+    // OR verify the user exists in your SQL/Mongo DB. 
+    // Keep this as is if your backend handles user creation logic.
+    return this.requestHandler
+      .requestBuilder('POST', 'auth/register') // Ensure this endpoint exists in backend!
+      .withoutAuth()
+      .setBody(payload)
+      .execute();
   }
 }
 
@@ -1465,6 +3662,100 @@ export class ConfigService {
     return this.http
       .put<RestaurantConfig>(`${this.apiUrl}/${restaurant}`, config)
       .pipe(tap(() => this.loadingSignal.set(false)));
+  }
+}
+
+
+// =================================================================================
+// File: hotel-reservation/src/app/core/services/notification.service.ts
+// =================================================================================
+
+
+import { Injectable, inject } from '@angular/core';
+import { ToastrService } from 'ngx-toastr';
+
+@Injectable({
+  providedIn: 'root',
+})
+export class NotificationService {
+  private toastr = inject(ToastrService);
+
+  showSuccess(title: string, message: string) {
+    this.toastr.success(message, title);
+  }
+
+  showError(title: string, message: string) {
+    this.toastr.error(message, title);
+  }
+
+  showInfo(title: string, message: string) {
+    this.toastr.info(message, title);
+  }
+
+  showWarning(title: string, message: string) {
+    this.toastr.warning(message, title);
+  }
+}
+
+
+// =================================================================================
+// File: hotel-reservation/src/app/core/services/request-handler.service.ts
+// =================================================================================
+
+
+import { Injectable, inject } from '@angular/core';
+import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { Observable } from 'rxjs';
+import { environment } from '../../../environments/environment';
+
+interface RequestBuilder {
+  execute<T = any>(): Observable<T>;
+  setBody(body: any): RequestBuilder;
+  withoutAuth(): RequestBuilder;
+}
+
+@Injectable({
+  providedIn: 'root',
+})
+export class RequestHandlerService {
+  private http = inject(HttpClient);
+
+  requestBuilder(method: string, endpoint: string): RequestBuilder {
+    let body: any = null;
+    let skipAuth = false;
+    const http = this.http; // Capture http reference
+
+    const builder: RequestBuilder = {
+      setBody(data: any) {
+        body = data;
+        return builder;
+      },
+      withoutAuth() {
+        skipAuth = true;
+        return builder;
+      },
+      execute<T = any>(): Observable<T> {
+        const url = `${environment.apiUrl}/${endpoint}`;
+        const headers = new HttpHeaders({
+          'Content-Type': 'application/json',
+        });
+
+        switch (method.toUpperCase()) {
+          case 'GET':
+            return http.get<T>(url, { headers });
+          case 'POST':
+            return http.post<T>(url, body, { headers });
+          case 'PUT':
+            return http.put<T>(url, body, { headers });
+          case 'DELETE':
+            return http.delete<T>(url, { headers });
+          default:
+            throw new Error(`Unsupported HTTP method: ${method}`);
+        }
+      },
+    };
+
+    return builder;
   }
 }
 
@@ -1577,6 +3868,42 @@ export class ReservationService {
 
 
 // =================================================================================
+// File: hotel-reservation/src/app/core/services/user.service.ts
+// =================================================================================
+
+
+import { Injectable, inject } from '@angular/core';
+import { Observable, of } from 'rxjs';
+import { RequestHandlerService } from './request-handler.service';
+
+export interface UserProfile {
+  uid: string;
+  email: string;
+  name: string;
+  role: string;
+  photoUrl?: string;
+}
+
+@Injectable({
+  providedIn: 'root',
+})
+export class UserService {
+  private requestHandler = inject(RequestHandlerService);
+
+  getProfile(): Observable<UserProfile | null> {
+    return this.requestHandler.requestBuilder('GET', 'users/profile').execute<UserProfile>();
+  }
+
+  updateProfile(profile: Partial<UserProfile>): Observable<UserProfile> {
+    return this.requestHandler
+      .requestBuilder('PUT', 'users/profile')
+      .setBody(profile)
+      .execute<UserProfile>();
+  }
+}
+
+
+// =================================================================================
 // File: hotel-reservation/src/app/features/accounting/dashboard/dashboard.ts
 // =================================================================================
 
@@ -1611,87 +3938,70 @@ export class Dashboard {}
   <p class="mb-8 text-gray-600">Manage opening hours and reservation availability.</p>
 
   @if (loading()) {
-    <app-loading-spinner />
+  <app-loading-spinner />
   } @else {
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-      @for (name of restaurants; track name) {
-        <div class="bg-white p-6 rounded-xl shadow-md border border-gray-100">
-          
-          <!-- Header: Name + Toggle -->
-          <div class="flex justify-between items-center mb-4">
-            <h2 class="text-xl font-bold text-gray-800">{{ name }} Restaurant</h2>
-            <div class="flex items-center gap-2">
-              <span [class]="configs[name].isActive ? 'text-green-600' : 'text-red-500'" class="text-sm font-medium">
-                {{ configs[name].isActive ? 'Active' : 'Closed' }}
-              </span>
-              
-              <!-- Toggle Switch -->
-              <button 
-                (click)="toggleActive(name)"
-                [class.bg-green-500]="configs[name].isActive"
-                [class.bg-gray-300]="!configs[name].isActive"
-                class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-              >
-                <span 
-                  [class.translate-x-6]="configs[name].isActive"
-                  [class.translate-x-1]="!configs[name].isActive"
-                  class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
-                ></span>
-              </button>
-            </div>
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    @for (name of restaurants; track name) {
+    <div class="bg-white p-6 rounded-xl shadow-md border border-gray-100">
+
+      <!-- Header: Name + Toggle -->
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-xl font-bold text-gray-800">{{ name }} Restaurant</h2>
+        <div class="flex items-center gap-2">
+          <span [class]="configs[name].isActive ? 'text-green-600' : 'text-red-500'" class="text-sm font-medium">
+            {{ configs[name].isActive ? 'Active' : 'Closed' }}
+          </span>
+
+          <!-- Toggle Switch -->
+          <button (click)="toggleActive(name)" [class.bg-green-500]="configs[name].isActive"
+            [class.bg-gray-300]="!configs[name].isActive"
+            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+            <span [class.translate-x-6]="configs[name].isActive" [class.translate-x-1]="!configs[name].isActive"
+              class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Form -->
+      <div class="space-y-4">
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Opening Time</label>
+            <input type="time" [(ngModel)]="configs[name].openingTime"
+              class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2" />
           </div>
-
-          <!-- Form -->
-          <div class="space-y-4">
-            <div class="grid grid-cols-2 gap-4">
-              <div>
-                <label class="block text-sm font-medium text-gray-700">Opening Time</label>
-                <input 
-                  type="time" 
-                  [(ngModel)]="configs[name].openingTime"
-                  class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2"
-                />
-              </div>
-              <div>
-                <label class="block text-sm font-medium text-gray-700">Closing Time</label>
-                <input 
-                  type="time" 
-                  [(ngModel)]="configs[name].closingTime"
-                  class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-gray-700">Slot Interval (Minutes)</label>
-              <select 
-                [(ngModel)]="configs[name].intervalMinutes"
-                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2"
-              >
-                <option [ngValue]="15">15 Minutes</option>
-                <option [ngValue]="30">30 Minutes</option>
-                <option [ngValue]="60">60 Minutes</option>
-              </select>
-            </div>
-
-            <button
-              (click)="saveSettings(name)"
-              [disabled]="saving() === name"
-              class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition disabled:bg-blue-400 disabled:cursor-not-allowed flex justify-center items-center"
-            >
-              @if (saving() === name) {
-                <span class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></span>
-                Saving...
-              } @else {
-                Save Settings
-              }
-            </button>
+          <div>
+            <label class="block text-sm font-medium text-gray-700">Closing Time</label>
+            <input type="time" [(ngModel)]="configs[name].closingTime"
+              class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2" />
           </div>
         </div>
-      }
-    </div>
-  }\n</div>
 
+        <div>
+          <label class="block text-sm font-medium text-gray-700">Slot Interval (Minutes)</label>
+          <select [(ngModel)]="configs[name].intervalMinutes"
+            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2">
+            <option [ngValue]="15">15 Minutes</option>
+            <option [ngValue]="30">30 Minutes</option>
+            <option [ngValue]="60">60 Minutes</option>
+          </select>
+        </div>
+
+        <button (click)="saveSettings(name)" [disabled]="saving() === name"
+          class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition disabled:bg-blue-400 disabled:cursor-not-allowed flex justify-center items-center">
+          @if (saving() === name) {
+          <span class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></span>
+          Saving...
+          } @else {
+          Save Settings
+          }
+        </button>
+      </div>
+    </div>
+    }
+  </div>
+  }
+</div>
 
 // =================================================================================
 // File: hotel-reservation/src/app/features/admin/admin-settings/admin-settings.scss
@@ -1868,12 +4178,10 @@ import { HttpClient } from '@angular/common/http';
 import { BaseChartDirective } from 'ng2-charts';
 import { ChartConfiguration, ChartOptions } from 'chart.js';
 import { environment } from '../../../../environments/environment';
-import { LoadingSpinner } from '../../../shared/components/loading-spinner/loading-spinner';
-
 @Component({
   selector: 'app-analytics',
   standalone: true,
-  imports: [CommonModule, BaseChartDirective, LoadingSpinner],
+  imports: [CommonModule],
   templateUrl: './analytics.html',
 })
 export class Analytics implements OnInit {
@@ -2374,54 +4682,47 @@ export class EditReservation implements OnInit {
   <h2 class="text-3xl font-bold mb-6 text-gray-800">Manage Restaurant Capacities</h2>
 
   @if (loading()) {
-    <app-loading-spinner />
+  <app-loading-spinner />
   } @else {
-    <div class="overflow-x-auto bg-white shadow rounded-lg border border-gray-200">
-      <table class="w-full text-sm text-left text-gray-500">
-        <thead class="text-xs text-gray-700 uppercase bg-gray-100">
-          <tr>
-            <th class="px-6 py-4 font-bold text-gray-900">Restaurant</th>
-            @for (day of days; track day) {
-              <th class="px-4 py-3 text-center min-w-[100px]">
-                {{ getHeaderLabel(day) }}
-              </th>
-            }
-          </tr>
-        </thead>
-        <tbody>
-          @for (rest of restaurants; track rest) {
-            <tr class="border-b hover:bg-gray-50">
-              <td class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap bg-gray-50/50">
-                {{ rest }}
-              </td>
-              @for (day of days; track day) {
-                <td class="px-4 py-3 text-center">
-                  <!-- We use array syntax access for dynamic keys -->
-                  <input 
-                    type="number" 
-                    [(ngModel)]="capacities[getDateKey(rest, day)]" 
-                    min="0"
-                    class="w-20 text-center border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 border p-1"
-                  />
-                </td>
-              }
-            </tr>
+  <div class="overflow-x-auto bg-white shadow rounded-lg border border-gray-200">
+    <table class="w-full text-sm text-left text-gray-500">
+      <thead class="text-xs text-gray-700 uppercase bg-gray-100">
+        <tr>
+          <th class="px-6 py-4 font-bold text-gray-900">Restaurant</th>
+          @for (day of days; track day) {
+          <th class="px-4 py-3 text-center min-w-[100px]">
+            {{ getHeaderLabel(day) }}
+          </th>
           }
-        </tbody>
-      </table>
-    </div>
+        </tr>
+      </thead>
+      <tbody>
+        @for (rest of restaurants; track rest) {
+        <tr class="border-b hover:bg-gray-50">
+          <td class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap bg-gray-50/50">
+            {{ rest }}
+          </td>
+          @for (day of days; track day) {
+          <td class="px-4 py-3 text-center">
+            <!-- We use array syntax access for dynamic keys -->
+            <input type="number" [(ngModel)]="capacities[getDateKey(rest, day)]" min="0"
+              class="w-20 text-center border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 border p-1" />
+          </td>
+          }
+        </tr>
+        }
+      </tbody>
+    </table>
+  </div>
 
-    <div class="mt-6 flex justify-end">
-      <button 
-        (click)="save()"
-        [disabled]="saving()"
-        class="px-6 py-2.5 bg-blue-600 text-white font-medium text-sm leading-tight uppercase rounded shadow-md hover:bg-blue-700 hover:shadow-lg focus:bg-blue-700 focus:shadow-lg focus:outline-none focus:ring-0 active:bg-blue-800 active:shadow-lg transition duration-150 ease-in-out disabled:bg-gray-400"
-      >
-        {{ saving() ? 'Saving...' : 'Save Capacities' }}
-      </button>
-    </div>
-  }\n</div>
-
+  <div class="mt-6 flex justify-end">
+    <button (click)="save()" [disabled]="saving()"
+      class="px-6 py-2.5 bg-blue-600 text-white font-medium text-sm leading-tight uppercase rounded shadow-md hover:bg-blue-700 hover:shadow-lg focus:bg-blue-700 focus:shadow-lg focus:outline-none focus:ring-0 active:bg-blue-800 active:shadow-lg transition duration-150 ease-in-out disabled:bg-gray-400">
+      {{ saving() ? 'Saving...' : 'Save Capacities' }}
+    </button>
+  </div>
+  }
+</div>
 
 // =================================================================================
 // File: hotel-reservation/src/app/features/admin/manage-capacities/manage-capacities.scss
@@ -3071,13 +5372,16 @@ export class LoginComponent {
     this.isLoading.set(true);
     const { email, password } = this.form.value;
 
-    this.auth.login(email!, password!).subscribe({
-      next: ({ role }) => {
-        this.toast.success('Welcome back!');
+    // ✅ FIX: Pass as object
+    this.auth.login({ email: email!, password: password! }).subscribe({
+      next: () => {
+        // We don't get { role } directly from login anymore, 
+        // we get it from the authService.user signal
+        const user = this.auth.user(); 
+        const role = user?.role || 'student'; // Default fallback
         this.redirectBasedOnRole(role);
       },
       error: (err) => {
-        console.error(err);
         this.toast.error(err.message || 'Login failed');
         this.isLoading.set(false);
       },
@@ -5946,7 +8250,7 @@ export const environment = {
 import { bootstrapApplication } from '@angular/platform-browser';
 import { appConfig } from './app/app.config';
 import { AppComponent } from './app/app.component';
-
+import 'zone.js'; 
 bootstrapApplication(AppComponent, appConfig).catch((err) => console.error(err));
 
 
@@ -6036,6 +8340,20 @@ module.exports = {
   },
   plugins: [],
 };
+
+
+// =================================================================================
+// File: hotel-reservation/task.md
+// =================================================================================
+
+
+# Task: Fix Dependency Conflict and Run Frontend
+
+## Status
+
+- [x] Fix `package.json` dependency conflict <!-- id: 0 -->
+- [x] Run `npm install` <!-- id: 1 -->
+- [ ] Run frontend application <!-- id: 2 -->
 
 
 // =================================================================================

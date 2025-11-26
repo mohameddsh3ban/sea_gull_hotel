@@ -8,6 +8,20 @@ from app.services.firestore import get_db
 
 router = APIRouter()
 
+@router.get("/capacities/overview")
+async def get_capacities_overview():
+    """Get capacity overview as a list for the dashboard."""
+    db = get_db()
+    
+    docs = db.collection("capacities").stream()
+    result = []
+    
+    for doc in docs:
+        data = doc.to_dict()
+        result.append(data)
+    
+    return result
+
 @router.get("/capacities")
 async def get_capacities():
     """Get all capacities with reserved counts."""

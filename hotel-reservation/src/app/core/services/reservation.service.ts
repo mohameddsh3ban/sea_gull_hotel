@@ -27,7 +27,7 @@ export class ReservationService {
 
     this.loadingSignal.set(true);
     return this.http
-      .get<ReservationResponse>(this.apiUrl, { params })
+      .get<ReservationResponse>(`${this.apiUrl}/reservations`, { params })
       .pipe(tap(() => this.loadingSignal.set(false)));
   }
 

@@ -1,25 +1,29 @@
 import { inject } from '@angular/core';
-import { Router, CanActivateFn } from '@angular/router';
+import { CanActivateFn, Router } from '@angular/router';
 import { AuthService } from '../services/auth.service';
+import { map, take, filter, switchMap } from 'rxjs/operators';
 
-export const roleGuard: (allowedRoles: string[]) => CanActivateFn = (allowedRoles: string[]) => {
-  return async () => {
+export function roleGuard(allowedRoles: Array<'student' | 'teacher' | 'admin' | 'reception' | 'kitchen' | 'accounting'>): CanActivateFn {
+  return () => {
     const authService = inject(AuthService);
     const router = inject(Router);
 
-    const isAuthenticated = authService.isAuthenticated();
-
-    if (!isAuthenticated) {
-      return router.createUrlTree(['/login']);
-    }
-
-    const userRole = await authService.getUserRole();
-
-    if (!userRole || !allowedRoles.includes(userRole)) {
-      // Redirect to appropriate dashboard or show error
-      return router.createUrlTree(['/login']);
-    }
-
-    return true;
+    return authService.isLoading$.pipe(
+      filter(loading => !loading),
+      take(1),
+      switchMap(() => authService.user$),
+      take(1),
+      map(currentUser => {
+        if (!currentUser || !allowedRoles.includes(currentUser.role as 'student' | 'teacher' | 'admin' | 'reception' | 'kitchen' | 'accounting')) {
+          console.warn(`Role guard: Access denied.`);
+          // If user is missing (logged out), let AuthGuard handle the redirect usually,
+          // but if we are here, redirect to login or appropriate dashboard
+          if(!currentUser) return router.parseUrl('/auth/login');
+          // Assuming role specific dashboards exist like /admin, /reception etc.
+          return router.parseUrl(`/${currentUser.role}`);
+        }
+        return true;
+      })
+    );
   };
-};
+}
