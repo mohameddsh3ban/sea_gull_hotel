@@ -1,10 +1,13 @@
+// =================================================================================
+// File: hotel-reservation/src/app/features/guest/contact/contact.component.ts
+// =================================================================================
+
 import { Component } from '@angular/core';
-import { TranslateModule } from '@ngx-translate/core';
 
 @Component({
   selector: 'app-contact',
   standalone: true,
-  imports: [TranslateModule],
+  imports: [],
   template: `
     <div class="max-w-4xl mx-auto p-8 bg-white mt-10 rounded-xl shadow pt-24 md:pt-28">
       <h1 class="text-3xl font-bold mb-4 text-gray-800">Contact Us</h1>

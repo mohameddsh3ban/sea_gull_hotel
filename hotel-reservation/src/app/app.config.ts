@@ -1,3 +1,7 @@
+// =================================================================================
+// File: hotel-reservation/src/app/app.config.ts
+// =================================================================================
+
 import {
   ApplicationConfig,
   importProvidersFrom,
@@ -10,20 +14,13 @@ import { initializeApp, provideFirebaseApp } from '@angular/fire/app';
 import { getAuth, provideAuth } from '@angular/fire/auth';
 import { AngularFireModule } from '@angular/fire/compat';
 import { AngularFireAuthModule } from '@angular/fire/compat/auth';
-import { TranslateModule, TranslateLoader } from '@ngx-translate/core';
-import { TranslateHttpLoader } from '@ngx-translate/http-loader';
-import { HttpClient } from '@angular/common/http';
+// Removed Translate imports
 import { provideToastr } from 'ngx-toastr';
 import { provideCharts, withDefaultRegisterables } from 'ng2-charts';
 
 import { routes } from './app.routes';
 import { environment } from '../environments/environment';
 import { authInterceptor } from './core/interceptors/auth.interceptor';
-
-// Factory function for translation loader
-export function HttpLoaderFactory(http: HttpClient) {
-  return new TranslateHttpLoader();
-}
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -35,15 +32,8 @@ export const appConfig: ApplicationConfig = {
     provideAuth(() => getAuth()),
     importProvidersFrom(
       AngularFireModule.initializeApp(environment.firebase),
-      AngularFireAuthModule,
-      TranslateModule.forRoot({
-        defaultLanguage: 'en',
-        loader: {
-          provide: TranslateLoader,
-          useFactory: HttpLoaderFactory,
-          deps: [HttpClient],
-        },
-      })
+      AngularFireAuthModule
+      // Removed TranslateModule.forRoot(...)
     ),
     provideToastr({
       timeOut: 3000,

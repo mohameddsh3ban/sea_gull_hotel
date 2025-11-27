@@ -5,17 +5,18 @@
   @if (loading()) {
   <app-loading-spinner />
   } @else {
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-    @for (name of restaurants; track name) {
-    <div class="bg-white p-6 rounded-xl shadow-md border border-gray-100">
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <!-- Use dynamic restaurantNames array -->
+    @for (name of restaurantNames; track name) {
+        <div class="bg-white p-6 rounded-xl shadow-md border border-gray-100">
 
-      <!-- Header: Name + Toggle -->
-      <div class="flex justify-between items-center mb-4">
-        <h2 class="text-xl font-bold text-gray-800">{{ name }} Restaurant</h2>
-        <div class="flex items-center gap-2">
-          <span [class]="configs[name].isActive ? 'text-green-600' : 'text-red-500'" class="text-sm font-medium">
-            {{ configs[name].isActive ? 'Active' : 'Closed' }}
-          </span>
+            <!-- Header: Name + Toggle -->
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-bold text-gray-800">{{ name }} Restaurant</h2>
+                <div class="flex items-center gap-2">
+                    <span [class]="configs[name].isActive ? 'text-green-600' : 'text-red-500'" class="text-sm font-medium">
+                        {{ configs[name].isActive ? 'Active' : 'Closed' }}
+                    </span>
 
           <!-- Toggle Switch -->
           <button (click)="toggleActive(name)" [class.bg-green-500]="configs[name].isActive"

@@ -62,7 +62,7 @@ async def send_review_requests(request: Request, background_tasks: BackgroundTas
             failures.append({"id": doc.id, "error": str(e)})
     
     if sent > 0:
-        await batch.commit() # Use await for async batch commit
+        batch.commit() # Use await for async batch commit
     
     return {"sent": sent, "failed": failures}
 

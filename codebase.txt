@@ -55,6 +55,7 @@ from app.api.v1.endpoints import reviews
 from app.api.v1.endpoints import admin
 from app.api.v1.endpoints import auth
 from app.api.v1.endpoints import config
+from app.api.v1.endpoints import restaurants # <--- Import
 
 api_router = APIRouter()
 api_router.include_router(reservations.router, tags=["reservations"])
@@ -63,6 +64,7 @@ api_router.include_router(reviews.router, tags=["reviews"])
 api_router.include_router(admin.router, tags=["admin"])
 api_router.include_router(auth.router, tags=["auth"])
 api_router.include_router(config.router, tags=["config"])
+api_router.include_router(restaurants.router, prefix="/restaurants", tags=["restaurants"]) # <--- Add
 
 
 // =================================================================================
@@ -354,6 +356,20 @@ from app.services.firestore import get_db
 
 router = APIRouter()
 
+@router.get("/capacities/overview")
+async def get_capacities_overview():
+    """Get capacity overview as a list for the dashboard."""
+    db = get_db()
+    
+    docs = db.collection("capacities").stream()
+    result = []
+    
+    for doc in docs:
+        data = doc.to_dict()
+        result.append(data)
+    
+    return result
+
 @router.get("/capacities")
 async def get_capacities():
     """Get all capacities with reserved counts."""
@@ -415,7 +431,7 @@ async def save_capacities(capacities: dict):
                 "reserved_guests": 0
             })
     
-    await batch.commit()
+    batch.commit()
     return {"message": "Capacities saved successfully"}
 
 
@@ -547,9 +563,9 @@ async def create_reservation(
     capacity_ref = db.collection("capacities").document(capacity_key)
     new_reservation_ref = db.collection("reservations").document()
     
-    @firestore.async_transactional
-    async def create_reservation_transaction(transaction, db_client):
-        capacity_doc = await capacity_ref.get(transaction=transaction)
+    @firestore.transactional
+    def create_reservation_transaction(transaction):
+        capacity_doc = capacity_ref.get(transaction=transaction)
         
         if not capacity_doc.exists:
             # Auto-create capacity if missing (optional, based on your preference)
@@ -572,7 +588,7 @@ async def create_reservation(
         return new_reservation_ref.id
     
     try:
-        reservation_id = await create_reservation_transaction(db.transaction(), db)
+        reservation_id = create_reservation_transaction(transaction)
         
         # Queue email
         background_tasks.add_task(
@@ -623,9 +639,9 @@ async def update_reservation(
     db = get_db()
     res_ref = db.collection("reservations").document(reservation_id)
     
-    @firestore.async_transactional
-    async def update_transaction(transaction, db_client):
-        res_doc = await res_ref.get(transaction=transaction)
+    @firestore.transactional
+    def update_transaction(transaction):
+        res_doc = res_ref.get(transaction=transaction)
         if not res_doc.exists:
             raise HTTPException(status_code=404, detail="Reservation not found")
             
@@ -642,7 +658,7 @@ async def update_reservation(
             old_cap_ref = db.collection("capacities").document(f"{restaurant}_{old_date}")
             new_cap_ref = db.collection("capacities").document(f"{restaurant}_{new_date}")
             
-            new_cap_doc = await new_cap_ref.get(transaction=transaction)
+            new_cap_doc = new_cap_ref.get(transaction=transaction)
             
             if not new_cap_doc.exists:
                 # Decide policy: Fail or Auto-create? Let's fail for safety in Admin mode
@@ -669,7 +685,7 @@ async def update_reservation(
 
     try:
         # Run transaction
-        old_data = await update_transaction(db.transaction(), db)
+        old_data = update_transaction(transaction)
         
         # Merge old data with new payload for the email context
         email_data = old_data.copy()
@@ -718,7 +734,7 @@ async def list_reservations(
     # Cursor-based pagination
     if filters.last_id:
         last_doc_ref = db.collection("reservations").document(filters.last_id)
-        last_doc = await last_doc_ref.get()
+        last_doc = last_doc_ref.get()
         if last_doc.exists:
             query = query.start_after(last_doc)
     
@@ -726,7 +742,7 @@ async def list_reservations(
     query = query.limit(filters.limit)
     
     # Execute query
-    docs = [doc async for doc in query.stream()]
+    docs = list(query.stream())
     
     # In-memory search filter (if needed, as Firestore doesn't support full-text search)
     if filters.search:
@@ -795,6 +811,82 @@ async def cancel_reservation(
 
 
 // =================================================================================
+// File: backend/app/api/v1/endpoints/restaurants.py
+// =================================================================================
+
+
+# backend/app/api/v1/endpoints/restaurants.py
+from fastapi import APIRouter, HTTPException, Depends
+from typing import List
+from app.services.firestore import get_db
+from app.models.restaurant import Restaurant
+from app.api.deps import require_role # Import security dependency
+
+router = APIRouter()
+
+# 1. GET ALL (Public)
+@router.get("/", response_model=List[Restaurant])
+async def get_restaurants():
+    """Get all active restaurants."""
+    db = get_db()
+    # Fetch all, frontend can filter by isActive if needed, 
+    # or admin needs to see inactive ones too.
+    docs = db.collection("restaurants").order_by("order").stream()
+    
+    results = []
+    for doc in docs:
+        results.append(doc.to_dict())
+    return results
+
+# 2. GET ONE (Public)
+@router.get("/{restaurant_id}", response_model=Restaurant)
+async def get_restaurant(restaurant_id: str):
+    """Get details for a specific restaurant."""
+    db = get_db()
+    doc = db.collection("restaurants").document(restaurant_id).get()
+    
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    
+    return doc.to_dict()
+
+# 3. CREATE (Admin Only)
+@router.post("/", dependencies=[Depends(require_role("admin"))])
+async def create_restaurant(restaurant: Restaurant):
+    """Create a new restaurant."""
+    db = get_db()
+    
+    doc_ref = db.collection("restaurants").document(restaurant.id)
+    if doc_ref.get().exists:
+        raise HTTPException(status_code=400, detail="Restaurant ID already exists")
+    
+    doc_ref.set(restaurant.model_dump())
+    return {"message": "Restaurant created successfully", "id": restaurant.id}
+
+# 4. UPDATE (Admin Only)
+@router.put("/{restaurant_id}", dependencies=[Depends(require_role("admin"))])
+async def update_restaurant(restaurant_id: str, restaurant: Restaurant):
+    """Update an existing restaurant (Menu, Config, Media)."""
+    db = get_db()
+    
+    doc_ref = db.collection("restaurants").document(restaurant_id)
+    if not doc_ref.get().exists:
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    
+    # Update the document
+    doc_ref.set(restaurant.model_dump())
+    return {"message": "Restaurant updated successfully"}
+
+# 5. DELETE (Admin Only)
+@router.delete("/{restaurant_id}", dependencies=[Depends(require_role("admin"))])
+async def delete_restaurant(restaurant_id: str):
+    """Delete a restaurant."""
+    db = get_db()
+    db.collection("restaurants").document(restaurant_id).delete()
+    return {"message": "Restaurant deleted successfully"}
+
+
+// =================================================================================
 // File: backend/app/api/v1/endpoints/reviews.py
 // =================================================================================
 
@@ -809,6 +901,8 @@ from app.api.deps import require_role
 from app.services.email import send_review_request_email
 from app.services.firestore import get_db
 from app.core.config import settings
+from typing import Optional
+
 router = APIRouter()
 
 def generate_review_token():
@@ -861,7 +955,7 @@ async def send_review_requests(request: Request, background_tasks: BackgroundTas
             failures.append({"id": doc.id, "error": str(e)})
     
     if sent > 0:
-        await batch.commit() # Use await for async batch commit
+        batch.commit() # Use await for async batch commit
     
     return {"sent": sent, "failed": failures}
 
@@ -911,6 +1005,74 @@ async def submit_review(payload: dict):
     })
     
     return {"message": "Review submitted"}
+
+@router.get("/reviews/summary")
+async def get_reviews_summary(
+    restaurantId: str,
+    period_days: int = 30,
+    user: dict = Depends(require_role("admin"))
+):
+    """Get review statistics."""
+    db = get_db()
+    
+    # Calculate date range
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=period_days)
+    
+    # In a real app, you would filter by date field in Firestore
+    # For MVP, we will fetch and filter in memory or usage simple queries
+    docs = db.collection("restaurant_reviews")\
+        .where("restaurantId", "==", restaurantId)\
+        .stream()
+        
+    total_rating = 0
+    count = 0
+    histogram = {i: 0 for i in range(1, 11)}
+    
+    for doc in docs:
+        data = doc.to_dict()
+        # Ideally check date here
+        rating = data.get("rating", 0)
+        
+        total_rating += rating
+        count += 1
+        if 1 <= rating <= 10:
+            histogram[rating] += 1
+            
+    avg = (total_rating / count) if count > 0 else 0
+    
+    return {
+        "count": count,
+        "avg": round(avg, 1),
+        "histogram": histogram
+    }
+
+@router.get("/reviews/log")
+async def get_reviews_log(
+    restaurantId: str,
+    limit: int = 10,
+    user: dict = Depends(require_role("admin"))
+):
+    """Get recent reviews."""
+    db = get_db()
+    
+    query = db.collection("restaurant_reviews")\
+        .where("restaurantId", "==", restaurantId)\
+        .order_by("createdAt", direction=firestore.Query.DESCENDING)\
+        .limit(int(limit))
+        
+    docs = query.stream()
+    
+    items = []
+    for doc in docs:
+        data = doc.to_dict()
+        data['id'] = doc.id
+        # Convert timestamp to string for JSON
+        if data.get('createdAt'):
+            data['createdAt'] = data['createdAt'].isoformat()
+        items.append(data)
+        
+    return {"items": items}
 
 
 // =================================================================================
@@ -1145,18 +1307,18 @@ class RestaurantConfig(BaseModel):
 
 
 from pydantic import BaseModel, EmailStr, Field, validator
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 class ReservationCreate(BaseModel):
     date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     time: str = Field(..., pattern=r"^\d{2}:\d{2}$")
-    guests: int = Field(..., ge=1, le=4)
+    guests: int = Field(..., ge=1, le=20) # Increased limit to avoid validation errors
     room: str = Field(..., min_length=1, max_length=10)
     first_name: str = Field(..., min_length=1, max_length=50)
     last_name: str = Field(..., min_length=1, max_length=50)
     email: EmailStr
-    restaurant: str = Field(..., pattern="^(Indian|Chinese|Italian|Oriental)$")
+    restaurant: str = Field(..., min_length=1)
     main_courses: Optional[List[str]] = []
     comments: Optional[str] = Field(None, max_length=500)
     upsell_items: Optional[Dict[str, int]] = {}
@@ -1164,23 +1326,6 @@ class ReservationCreate(BaseModel):
     
     @validator('main_courses')
     def validate_main_courses(cls, v, values):
-        restaurant = values.get('restaurant', '').lower()
-        guests = values.get('guests', 0)
-        
-        if restaurant in ['chinese', 'indian', 'italian']:
-            if len(v) != guests:
-                raise ValueError(f"Must select {guests} main courses")
-            
-            allowed = {
-                'italian': {'quatro_formagi', 'chicken_pizza', 'petto_chicken'},
-                'indian': {'chicken', 'meat'},
-                'chinese': {'chicken', 'meat'}
-            }
-            
-            for course in v:
-                if course.lower() not in allowed.get(restaurant, set()):
-                    raise ValueError(f"Invalid course: {course}")
-        
         return v
     
     @validator('upsell_items')
@@ -1205,6 +1350,9 @@ class ReservationResponse(BaseModel):
     email_status: str
     cancel_token: str
     created_at: datetime
+    # Add VIP fields to response so frontend can show yellow highlight
+    is_vip: Optional[bool] = False
+    vip_level: Optional[str] = "Standard"
     
     class Config:
         from_attributes = True
@@ -1217,11 +1365,72 @@ class ReservationFilter(BaseModel):
     from_date: Optional[str] = None
     to_date: Optional[str] = None
     search: Optional[str] = None
-    last_id: Optional[str] = None # For cursor-based pagination
+    last_id: Optional[str] = None
+
+# ✅ New Class to define pagination structure strictly
+class PaginationMeta(BaseModel):
+    current_page_items: int
+    per_page: int
+    next_last_id: Optional[str] = None # Allows String or None
+    has_next: bool                     # Allows Boolean
 
 class PaginatedReservations(BaseModel):
     items: List[ReservationResponse]
-    pagination: Dict[str, int]
+    pagination: PaginationMeta         # Use the new class instead of Dict[str, int]
+
+
+// =================================================================================
+// File: backend/app/models/restaurant.py
+// =================================================================================
+
+
+# backend/app/models/restaurant.py
+from pydantic import BaseModel
+from typing import List, Optional, Any
+
+class MediaConfig(BaseModel):
+    cardImage: str
+    coverImage: str
+    menuPdfUrl: str
+
+class TimeConfig(BaseModel):
+    openingTime: str
+    closingTime: str
+    timeSlotInterval: int
+    maxGuestsPerBooking: int
+
+class MainCourseItem(BaseModel):
+    id: str
+    label: str
+    available: bool
+
+class UpsellItem(BaseModel):
+    id: str
+    label: str
+    price: float
+    category: Optional[str] = "General"
+
+class MenuConfig(BaseModel):
+    hasMainCourseSelection: bool
+    mainCourseLabel: Optional[str] = ""
+    mainCourses: List[MainCourseItem] = []
+    
+    hasUpsells: bool
+    upsellLabel: Optional[str] = ""
+    upsellItems: List[UpsellItem] = []
+
+class Restaurant(BaseModel):
+    id: str
+    name: str
+    description: str
+    isActive: bool
+    order: int
+    media: MediaConfig
+    config: TimeConfig
+    menuConfig: MenuConfig
+
+class RestaurantListResponse(BaseModel):
+    items: List[Restaurant]
 
 
 // =================================================================================
@@ -1668,6 +1877,166 @@ black==24.3.0
 ruff==0.3.4
 
 prometheus-fastapi-instrumentator==7.0.0
+
+// =================================================================================
+// File: backend/seed_restaurants.py
+// =================================================================================
+
+
+# backend/seed_restaurants.py
+import firebase_admin
+from firebase_admin import credentials, firestore
+import os
+
+# 1. Initialize Firebase (Script-level)
+if not firebase_admin._apps:
+    cred = credentials.Certificate("service-account.json")
+    firebase_admin.initialize_app(cred)
+
+db = firestore.client()
+
+def seed_restaurants():
+    print("🌱 Seeding Firestore with Smart Restaurant Data...")
+
+    # Define the "Smart" Data for your current restaurants
+    restaurants_data = [
+        {
+            "id": "Italian",
+            "name": "Italian Restaurant",
+            "description": "Enjoy hand-tossed pizzas and creamy pastas in a relaxed setting.",
+            "isActive": True,
+            "order": 1,
+            "media": {
+                "cardImage": "assets/images/italian.png", # Frontend will treat these as relative paths for now
+                "coverImage": "assets/images/italian-cover.jpg", 
+                "menuPdfUrl": "/menus/Italian.pdf"
+            },
+            "config": {
+                "openingTime": "18:00",
+                "closingTime": "22:00",
+                "timeSlotInterval": 30,
+                "maxGuestsPerBooking": 8
+            },
+            "menuConfig": {
+                "hasMainCourseSelection": True,
+                "mainCourseLabel": "Select your Main Course",
+                "mainCourses": [
+                    { "id": "quatro_formagi", "label": "Quattro Formaggi", "available": True },
+                    { "id": "chicken_pizza", "label": "Chicken Pizza", "available": True },
+                    { "id": "petto_chicken", "label": "Petto di Pollo", "available": True }
+                ],
+                "hasUpsells": False,
+                "upsellLabel": "",
+                "upsellItems": []
+            }
+        },
+        {
+            "id": "Chinese",
+            "name": "Chinese Restaurant",
+            "description": "Explore bold Asian flavors prepared using traditional techniques.",
+            "isActive": True,
+            "order": 2,
+            "media": {
+                "cardImage": "assets/images/chinese.png",
+                "coverImage": "assets/images/chinese-cover.jpg",
+                "menuPdfUrl": "/menus/Chinese.pdf"
+            },
+            "config": {
+                "openingTime": "18:00",
+                "closingTime": "22:00",
+                "timeSlotInterval": 30,
+                "maxGuestsPerBooking": 8
+            },
+            "menuConfig": {
+                "hasMainCourseSelection": True,
+                "mainCourseLabel": "Select your Main Dish",
+                "mainCourses": [
+                    { "id": "chicken", "label": "Chicken", "available": True },
+                    { "id": "meat", "label": "Meat", "available": True }
+                ],
+                "hasUpsells": True,
+                "upsellLabel": "Add Sushi (Extra Charge)",
+                "upsellItems": [
+                    { "id": "Hot Dynamites", "label": "Hot Dynamites", "price": 4, "category": "Hot Rolls" },
+                    { "id": "Hot Crab", "label": "Hot Crab", "price": 4, "category": "Hot Rolls" },
+                    { "id": "Hot Dragon", "label": "Hot Dragon", "price": 4, "category": "Hot Rolls" },
+                    { "id": "Sake Maki", "label": "Sake Maki", "price": 3, "category": "Maki" },
+                    { "id": "Seagull Roll", "label": "Seagull Roll", "price": 5, "category": "Maki" },
+                    { "id": "Kappa Roll", "label": "Kappa Roll", "price": 2, "category": "Maki" },
+                    { "id": "Kabi Maki", "label": "Kabi Maki", "price": 4, "category": "Maki" }
+                ]
+            }
+        },
+        {
+            "id": "Indian",
+            "name": "Indian Restaurant",
+            "description": "Taste the vibrant spices of India with rich curries.",
+            "isActive": True,
+            "order": 3,
+            "media": {
+                "cardImage": "assets/images/indian.png",
+                "coverImage": "assets/images/indian-cover.jpg",
+                "menuPdfUrl": "/menus/Indian.pdf"
+            },
+            "config": {
+                "openingTime": "18:00",
+                "closingTime": "22:00",
+                "timeSlotInterval": 30,
+                "maxGuestsPerBooking": 8
+            },
+            "menuConfig": {
+                "hasMainCourseSelection": True,
+                "mainCourseLabel": "Select your Main Dish",
+                "mainCourses": [
+                    { "id": "chicken", "label": "Chicken", "available": True },
+                    { "id": "meat", "label": "Meat", "available": True }
+                ],
+                "hasUpsells": False,
+                "upsellLabel": "",
+                "upsellItems": []
+            }
+        },
+        {
+            "id": "Oriental",
+            "name": "Oriental Restaurant",
+            "description": "Authentic local cuisine.",
+            "isActive": True,
+            "order": 4,
+            "media": {
+                "cardImage": "assets/images/oriental.png", # Ensure you have this image or change it
+                "coverImage": "assets/images/oriental-cover.jpg",
+                "menuPdfUrl": "/menus/Oriental.pdf"
+            },
+            "config": {
+                "openingTime": "18:00",
+                "closingTime": "22:00",
+                "timeSlotInterval": 30,
+                "maxGuestsPerBooking": 8
+            },
+            "menuConfig": {
+                "hasMainCourseSelection": False, # Oriental usually set menu/buffet in this context
+                "mainCourseLabel": "",
+                "mainCourses": [],
+                "hasUpsells": False,
+                "upsellLabel": "",
+                "upsellItems": []
+            }
+        }
+    ]
+
+    batch = db.batch()
+    collection_ref = db.collection("restaurants")
+
+    for rest in restaurants_data:
+        doc_ref = collection_ref.document(rest["id"])
+        batch.set(doc_ref, rest)
+    
+    batch.commit()
+    print("✅ Successfully seeded 4 restaurants into 'restaurants' collection.")
+
+if __name__ == "__main__":
+    seed_restaurants()
+
 
 // =================================================================================
 // File: backend/set_role.py
@@ -2646,6 +3015,10 @@ export class AppComponent {}
 // =================================================================================
 
 
+// =================================================================================
+// File: hotel-reservation/src/app/app.config.ts
+// =================================================================================
+
 import {
   ApplicationConfig,
   importProvidersFrom,
@@ -2658,20 +3031,13 @@ import { initializeApp, provideFirebaseApp } from '@angular/fire/app';
 import { getAuth, provideAuth } from '@angular/fire/auth';
 import { AngularFireModule } from '@angular/fire/compat';
 import { AngularFireAuthModule } from '@angular/fire/compat/auth';
-import { TranslateModule, TranslateLoader } from '@ngx-translate/core';
-import { TranslateHttpLoader } from '@ngx-translate/http-loader';
-import { HttpClient } from '@angular/common/http';
+// Removed Translate imports
 import { provideToastr } from 'ngx-toastr';
 import { provideCharts, withDefaultRegisterables } from 'ng2-charts';
 
 import { routes } from './app.routes';
 import { environment } from '../environments/environment';
 import { authInterceptor } from './core/interceptors/auth.interceptor';
-
-// Factory function for translation loader
-export function HttpLoaderFactory(http: HttpClient) {
-  return new TranslateHttpLoader();
-}
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -2683,15 +3049,8 @@ export const appConfig: ApplicationConfig = {
     provideAuth(() => getAuth()),
     importProvidersFrom(
       AngularFireModule.initializeApp(environment.firebase),
-      AngularFireAuthModule,
-      TranslateModule.forRoot({
-        defaultLanguage: 'en',
-        loader: {
-          provide: TranslateLoader,
-          useFactory: HttpLoaderFactory,
-          deps: [HttpClient],
-        },
-      })
+      AngularFireAuthModule
+      // Removed TranslateModule.forRoot(...)
     ),
     provideToastr({
       timeOut: 3000,
@@ -3057,6 +3416,10 @@ export const appConfig: ApplicationConfig = {
 // =================================================================================
 
 
+// =================================================================================
+// File: hotel-reservation/src/app/app.routes.ts
+// =================================================================================
+
 import { Routes } from '@angular/router';
 import { AuthLayout } from './layouts/auth-layout/auth-layout';
 import { GuestLayoutComponent } from './layouts/guest-layout/guest-layout.component';
@@ -3064,9 +3427,9 @@ import { AdminLayoutComponent } from './layouts/admin-layout/admin-layout.compon
 import { roleGuard } from './core/guards/role.guard';
 
 export const routes: Routes = [
-  // 1. Auth Routes (Wrapped in AuthLayout)
+  // 1. Auth Routes (Moved to /auth to prevent Home hijacking)
   {
-    path: '',
+    path: 'auth',
     component: AuthLayout,
     children: [
       {
@@ -3074,10 +3437,14 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/auth/login/login.component').then((m) => m.LoginComponent),
       },
+      { path: '', redirectTo: 'login', pathMatch: 'full' }
     ],
   },
+  
+  // Shortcut: /login -> /auth/login
+  { path: 'login', redirectTo: 'auth/login', pathMatch: 'full' },
 
-  // 2. Admin Routes (Protected, wrapped in AdminLayout)
+  // 2. Admin Routes (Protected)
   {
     path: 'admin',
     component: AdminLayoutComponent,
@@ -3091,13 +3458,49 @@ export const routes: Routes = [
       { path: 'reviews', loadComponent: () => import('./features/admin/reviews/reviews').then(m => m.Reviews) },
       { path: 'upload-guest-list', loadComponent: () => import('./features/admin/upload-guest-list/upload-guest-list').then(m => m.UploadGuestList) },
       { path: 'edit/:id', loadComponent: () => import('./features/admin/edit-reservation/edit-reservation').then(m => m.EditReservation) },
+      { 
+        path: 'restaurants', 
+        loadComponent: () => import('./features/admin/manage-restaurants/manage-restaurants.component').then(m => m.ManageRestaurantsComponent) 
+      },
+      { 
+        path: 'restaurants/edit/:id', 
+        loadComponent: () => import('./features/admin/restaurant-editor/restaurant-editor.component').then(m => m.RestaurantEditorComponent) 
+      },
+      { 
+        path: 'restaurants/new', 
+        loadComponent: () => import('./features/admin/restaurant-editor/restaurant-editor.component').then(m => m.RestaurantEditorComponent) 
+      },
     ]
   },
+  
+  // 3. Staff Dashboards
+  {
+    path: 'reception/dashboard',
+    canActivate: [roleGuard(['reception', 'admin'])],
+    loadComponent: () => import('./features/reception/dashboard/dashboard').then(m => m.Dashboard)
+  },
+  {
+    path: 'kitchen/dashboard',
+    canActivate: [roleGuard(['kitchen', 'admin'])],
+    loadComponent: () => import('./features/kitchen/dashboard/dashboard').then(m => m.Dashboard)
+  },
+  {
+    path: 'accounting/dashboard',
+    canActivate: [roleGuard(['accounting', 'admin'])],
+    loadComponent: () => import('./features/accounting/dashboard/dashboard').then(m => m.Dashboard)
+  },
+
+  // 4. Guest Routes (Public Landing Page)
+  // This matches the root path '' and loads the Home component
   {
     path: '',
     component: GuestLayoutComponent,
     children: [
-      { path: '', loadComponent: () => import('./features/guest/home/home.component').then(m => m.HomeComponent) },
+      { 
+        path: '', 
+        loadComponent: () => import('./features/guest/home/home.component').then(m => m.HomeComponent),
+        pathMatch: 'full' 
+      },
       { path: 'reservation/:restaurantId', loadComponent: () => import('./features/guest/reservation-form/reservation-form.component').then(m => m.ReservationFormComponent) },
       { path: 'confirmation', loadComponent: () => import('./features/guest/confirmation/confirmation.component').then(m => m.ConfirmationComponent) },
       { path: 'cancel/:token', loadComponent: () => import('./features/guest/guest-cancel/guest-cancel').then(m => m.GuestCancel) },
@@ -3269,28 +3672,34 @@ export const publicGuard: CanActivateFn = (route, state) => {
 import { inject } from '@angular/core';
 import { CanActivateFn, Router } from '@angular/router';
 import { AuthService } from '../services/auth.service';
-import { map, take, filter, switchMap } from 'rxjs/operators';
+import { map, filter, take } from 'rxjs/operators';
 
-export function roleGuard(allowedRoles: Array<'student' | 'teacher' | 'admin' | 'reception' | 'kitchen' | 'accounting'>): CanActivateFn {
+export function roleGuard(allowedRoles: string[]): CanActivateFn {
   return () => {
     const authService = inject(AuthService);
     const router = inject(Router);
 
     return authService.isLoading$.pipe(
-      filter(loading => !loading),
+      // 1. Wait for Firebase to initialize (on page refresh)
+      filter(isLoading => !isLoading),
       take(1),
-      switchMap(() => authService.user$),
-      take(1),
-      map(currentUser => {
-        if (!currentUser || !allowedRoles.includes(currentUser.role as 'student' | 'teacher' | 'admin' | 'reception' | 'kitchen' | 'accounting')) {
-          console.warn(`Role guard: Access denied.`);
-          // If user is missing (logged out), let AuthGuard handle the redirect usually,
-          // but if we are here, redirect to login or appropriate dashboard
-          if(!currentUser) return router.parseUrl('/auth/login');
-          // Assuming role specific dashboards exist like /admin, /reception etc.
-          return router.parseUrl(`/${currentUser.role}`);
+      // 2. Check User State
+      map(() => {
+        const user = authService.user();
+        
+        // Not logged in?
+        if (!user) {
+          return router.createUrlTree(['/login']);
         }
-        return true;
+
+        // Check Role
+        if (allowedRoles.includes(user.role)) {
+          return true;
+        }
+
+        // Logged in but wrong role?
+        console.warn(`Access Denied: User role '${user.role}' not in [${allowedRoles}]`);
+        return router.createUrlTree(['/login']); // Redirect to login as requested
       })
     );
   };
@@ -3302,32 +3711,42 @@ export function roleGuard(allowedRoles: Array<'student' | 'teacher' | 'admin' | 
 // =================================================================================
 
 
-import { HttpInterceptorFn } from '@angular/common/http';
+// =================================================================================
+// File: hotel-reservation/src/app/core/interceptors/auth.interceptor.ts
+// =================================================================================
+
+import { HttpInterceptorFn, HttpErrorResponse } from '@angular/common/http';
 import { inject } from '@angular/core';
-import { Auth } from '@angular/fire/auth';
-import { from, switchMap } from 'rxjs';
+import { AngularFireAuth } from '@angular/fire/compat/auth';
+import { throwError, from } from 'rxjs';
+import { switchMap, catchError, take } from 'rxjs/operators';
 
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
-  const auth = inject(Auth);
+  const afAuth = inject(AngularFireAuth);
 
-  // Skip auth for certain URLs (like public endpoints)
+  // Skip assets, i18n, and external URLs to prevent circular dependency or unnecessary checks
   if (req.url.includes('/assets/') || req.url.includes('i18n')) {
     return next(req);
   }
 
-  // Get the current user's ID token
-  return from(auth.currentUser?.getIdToken() ?? Promise.resolve(null)).pipe(
+  // FIX: Use idToken observable (stream) instead of currentUser promise.
+  // The Promise method often hangs indefinitely on page reload.
+  return afAuth.idToken.pipe(
+    take(1), // Take the first value (token or null) and complete immediately
     switchMap((token) => {
       if (token) {
-        // Clone the request and add the Authorization header
-        const cloned = req.clone({
-          setHeaders: {
-            Authorization: `Bearer ${token}`,
-          },
+        req = req.clone({
+          setHeaders: { Authorization: `Bearer ${token}` },
         });
-        return next(cloned);
       }
       return next(req);
+    }),
+    catchError((error: HttpErrorResponse) => {
+      // Handle Global Auth Errors (401/403)
+      if (error.status === 401 || error.status === 403) {
+        console.warn('Unauthorized request:', error.url);
+      }
+      return throwError(() => error);
     })
   );
 };
@@ -3431,30 +3850,70 @@ export interface CapacityData {
 
 
 // =================================================================================
+// File: hotel-reservation/src/app/core/models/restaurant.model.ts
+// =================================================================================
+
+
+export interface Restaurant {
+  id: string;
+  name: string;
+  description: string;
+  isActive: boolean;
+  order: number;
+  media: {
+    cardImage: string;
+    coverImage: string;
+    menuPdfUrl: string;
+  };
+  config: {
+    openingTime: string;
+    closingTime: string;
+    timeSlotInterval: number;
+    maxGuestsPerBooking: number;
+  };
+  menuConfig: {
+    hasMainCourseSelection: boolean;
+    mainCourseLabel: string;
+    mainCourses: MainCourseItem[];
+    hasUpsells: boolean;
+    upsellLabel: string;
+    upsellItems: UpsellItem[];
+  };
+}
+
+export interface MainCourseItem {
+  id: string;
+  label: string;
+  available: boolean;
+}
+
+export interface UpsellItem {
+  id: string;
+  label: string;
+  price: number;
+  category: string;
+}
+
+
+// =================================================================================
 // File: hotel-reservation/src/app/core/services/auth.service.ts
 // =================================================================================
 
 
+import { Injectable, inject, signal, computed, Signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { AngularFireAuth } from '@angular/fire/compat/auth';
-import { Observable, from, of, throwError, timer, BehaviorSubject } from 'rxjs';
-import { environment } from '../../../environments/environment';
-// Remove RequestHandlerService from imports if not used elsewhere, or keep if used for register
-import { catchError, filter, finalize, map, switchMap, take, tap } from 'rxjs/operators';
+import { Observable, from, BehaviorSubject, of, throwError } from 'rxjs';
+import { switchMap, tap, map, catchError, finalize } from 'rxjs/operators';
 import { LoginDto } from '../models/dto/login.dto';
-import { IRegisterPayload } from '../models/dto/register.dto';
 import { NotificationService } from './notification.service';
-import { RequestHandlerService } from './request-handler.service';
-import { HttpClient } from '@angular/common/http';
-import { computed, inject, Injectable, Signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { UserService } from './user.service';
 
 export interface IAuthUser {
   uid: string;
   email: string | null;
   name: string | null;
-  role?: string;
+  role: string; // Made required
   photoUrl?: string;
 }
 
@@ -3465,105 +3924,108 @@ export class AuthService {
   private afAuth = inject(AngularFireAuth);
   private router = inject(Router);
   private notificationService = inject(NotificationService);
-  private requestHandler = inject(RequestHandlerService);
-  private userService = inject(UserService);
-  
-  // ... (Keep Subjects and Signals as they were) ...
+
+  // BehaviorSubject to manage state imperatively
   private currentUserSubject = new BehaviorSubject<IAuthUser | null>(null);
-  public readonly user$ = this.currentUserSubject.asObservable();
   
+  // Expose as Observable and Signal
+  public readonly user$ = this.currentUserSubject.asObservable();
+  public readonly user = toSignal(this.user$, { initialValue: null });
+  
+  // Loading state for initial auth check
   private isLoadingSubject = new BehaviorSubject<boolean>(true);
   public readonly isLoading$ = this.isLoadingSubject.asObservable();
 
-  private _loginLoadingSubject = new BehaviorSubject<boolean>(false);
-  public readonly loginLoading$ = this._loginLoadingSubject.asObservable();
-
-  public readonly user: Signal<IAuthUser | null>;
-  public readonly isAuthenticated: Signal<boolean>;
+  // Computeds
+  public readonly isAuthenticated = computed(() => !!this.user());
+  public readonly isAdmin = computed(() => this.user()?.role === 'admin');
 
   constructor() {
-    this.user = toSignal(this.user$, { initialValue: null });
-    this.isAuthenticated = computed(() => !!this.user());
-
-    // Subscribe to Firebase Auth State
+    // 1. Listen to Firebase Auth State (Handles Page Refresh)
     this.afAuth.authState.pipe(
       switchMap(async (firebaseUser) => {
-        if (firebaseUser) {
-          // Get the ID Token Result to find the Custom Claim 'role'
-          const tokenResult = await firebaseUser.getIdTokenResult();
-          const role = (tokenResult.claims['role'] as string) || 'guest';
-          
-          const user: IAuthUser = {
-            uid: firebaseUser.uid,
-            email: firebaseUser.email,
-            name: firebaseUser.displayName,
-            photoUrl: firebaseUser.photoURL || undefined,
-            role: role, // ✅ Actually get the role from Firebase
-          };
-          return user;
-        } else {
-          return null;
-        }
+        if (!firebaseUser) return null;
+
+        // Force refresh token to ensure we get latest Custom Claims (Roles)
+        const tokenResult = await firebaseUser.getIdTokenResult(true);
+        const role = (tokenResult.claims['role'] as string) || 'guest';
+
+        return {
+          uid: firebaseUser.uid,
+          email: firebaseUser.email,
+          name: firebaseUser.displayName,
+          photoUrl: firebaseUser.photoURL || undefined,
+          role: role,
+        } as IAuthUser;
       })
-    ).subscribe((user) => {
-      console.log('Auth State Changed:', user?.email || 'Logged Out', 'Role:', user?.role);
-      this.currentUserSubject.next(user);
-      this.isLoadingSubject.next(false);
+    ).subscribe({
+      next: (user) => {
+        this.currentUserSubject.next(user);
+        this.isLoadingSubject.next(false);
+      },
+      error: (err) => {
+        console.error('Auth State Error', err);
+        this.isLoadingSubject.next(false);
+      }
     });
-    
-    // ... (Keep session check timer) ...
   }
 
-  // ... (Keep waitForAuthReady) ...
-
-  // ✅ REFACTORED LOGIN
-  // We no longer call the backend here. We just sign in with Firebase.
-  // The authState subscription above handles setting the user state.
-  login(credentials: LoginDto): Observable<any> {
-    this._loginLoadingSubject.next(true);
-
+  /**
+   * Login with Email/Password
+   * Returns the mapped User object so the component can redirect immediately.
+   */
+  login(credentials: LoginDto): Observable<IAuthUser> {
     return from(
       this.afAuth.signInWithEmailAndPassword(credentials.email, credentials.password)
     ).pipe(
-      tap(() => {
-        this.notificationService.showSuccess('Welcome Back!', 'You have successfully logged in.');
+      // Wait for the User Credential, then fetch the Token Result immediately
+      switchMap(async (userCredential) => {
+        if (!userCredential.user) throw new Error('No user found');
+        
+        // Force token refresh to get fresh claims
+        const tokenResult = await userCredential.user.getIdTokenResult(true);
+        const role = (tokenResult.claims['role'] as string) || 'guest';
+        
+        return {
+          uid: userCredential.user.uid,
+          email: userCredential.user.email,
+          name: userCredential.user.displayName,
+          photoUrl: userCredential.user.photoURL,
+          role: role
+        } as IAuthUser;
+      }),
+      tap((user) => {
+        // Update state immediately (don't wait for authState listener)
+        this.currentUserSubject.next(user);
+        this.notificationService.showSuccess('Welcome Back!', `Logged in as ${user.role}`);
       }),
       catchError((err) => {
-        console.error(err);
-        // Map Firebase errors to user-friendly messages
-        let msg = 'Login failed';
-        if (err.code === 'auth/user-not-found') msg = 'User not found';
-        if (err.code === 'auth/wrong-password') msg = 'Invalid password';
-        if (err.code === 'auth/invalid-credential') msg = 'Invalid credentials';
-        return throwError(() => new Error(msg));
-      }),
-      finalize(() => {
-        this._loginLoadingSubject.next(false);
+        return throwError(() => this.handleFirebaseError(err));
       })
     );
   }
 
   logout() {
-    this._loginLoadingSubject.next(true);
-    // Just sign out of Firebase. No need to tell backend unless you do server-side session cookies.
-    this.afAuth.signOut().then(() => {
-      this._loginLoadingSubject.next(false);
-      this.router.navigate(['/auth/login']);
-      this.notificationService.showSuccess('Logged Out', 'You have been successfully logged out.');
-    });
+    return from(this.afAuth.signOut()).pipe(
+      tap(() => {
+        this.currentUserSubject.next(null);
+        this.router.navigate(['/auth/login']);
+        this.notificationService.showSuccess('Logged Out', 'See you soon!');
+      })
+    );
   }
 
-  // ... (Keep register and other methods) ...
-  
-  register(payload: IRegisterPayload): Observable<any> {
-    // Registration might still need to go to backend to set custom claims (roles)
-    // OR verify the user exists in your SQL/Mongo DB. 
-    // Keep this as is if your backend handles user creation logic.
-    return this.requestHandler
-      .requestBuilder('POST', 'auth/register') // Ensure this endpoint exists in backend!
-      .withoutAuth()
-      .setBody(payload)
-      .execute();
+  private handleFirebaseError(err: any): Error {
+    console.error(err);
+    let msg = 'An unknown error occurred';
+    if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
+      msg = 'Invalid email or password';
+    } else if (err.code === 'auth/too-many-requests') {
+      msg = 'Too many failed attempts. Please try again later.';
+    } else if (err.code === 'auth/user-disabled') {
+      msg = 'This account has been disabled.';
+    }
+    return new Error(msg);
   }
 }
 
@@ -3576,7 +4038,7 @@ export class AuthService {
 import { Injectable, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { tap } from 'rxjs/operators';
+import { finalize } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 import { CapacityData } from '../models/reservation.model';
 
@@ -3584,7 +4046,7 @@ import { CapacityData } from '../models/reservation.model';
   providedIn: 'root',
 })
 export class CapacityService {
-  private apiUrl = `${environment.apiUrl}/capacities`;
+  private apiUrl = `${environment.apiUrl}/api/v1/capacities`;
 
   private loadingSignal = signal<boolean>(false);
   loading = this.loadingSignal.asReadonly();
@@ -3596,7 +4058,9 @@ export class CapacityService {
    */
   getAll(): Observable<CapacityData> {
     this.loadingSignal.set(true);
-    return this.http.get<CapacityData>(this.apiUrl).pipe(tap(() => this.loadingSignal.set(false)));
+    return this.http.get<CapacityData>(this.apiUrl).pipe(
+      finalize(() => this.loadingSignal.set(false))
+    );
   }
 
   /**
@@ -3606,7 +4070,7 @@ export class CapacityService {
     this.loadingSignal.set(true);
     return this.http
       .post<{ message: string }>(this.apiUrl, capacities)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   /**
@@ -3616,7 +4080,7 @@ export class CapacityService {
     this.loadingSignal.set(true);
     return this.http
       .get<any>(`${this.apiUrl}/overview`)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 }
 
@@ -3629,7 +4093,7 @@ export class CapacityService {
 import { Injectable, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { tap } from 'rxjs/operators';
+import { finalize } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 import { RestaurantConfig } from '../models/reservation.model';
 
@@ -3651,7 +4115,7 @@ export class ConfigService {
     this.loadingSignal.set(true);
     return this.http
       .get<{ [restaurant: string]: RestaurantConfig }>(this.apiUrl)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   /**
@@ -3661,7 +4125,7 @@ export class ConfigService {
     this.loadingSignal.set(true);
     return this.http
       .put<RestaurantConfig>(`${this.apiUrl}/${restaurant}`, config)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 }
 
@@ -3768,7 +4232,7 @@ export class RequestHandlerService {
 import { Injectable, signal } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { tap } from 'rxjs/operators';
+import { finalize } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 import { Reservation, ReservationResponse } from '../models/reservation.model';
 
@@ -3794,8 +4258,8 @@ export class ReservationService {
 
     this.loadingSignal.set(true);
     return this.http
-      .get<ReservationResponse>(this.apiUrl, { params })
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .get<ReservationResponse>(`${this.apiUrl}/reservations`, { params })
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   /**
@@ -3805,7 +4269,7 @@ export class ReservationService {
     this.loadingSignal.set(true);
     return this.http
       .get<Reservation>(`${this.apiUrl}/${id}`)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   /**
@@ -3815,7 +4279,7 @@ export class ReservationService {
     this.loadingSignal.set(true);
     return this.http
       .post<Reservation>(this.apiUrl, reservation)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   /**
@@ -3825,7 +4289,7 @@ export class ReservationService {
     this.loadingSignal.set(true);
     return this.http
       .put<Reservation>(`${this.apiUrl}/${id}`, reservation)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   /**
@@ -3835,7 +4299,7 @@ export class ReservationService {
     this.loadingSignal.set(true);
     return this.http
       .delete<void>(`${this.apiUrl}/${id}`)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   /**
@@ -3845,7 +4309,7 @@ export class ReservationService {
     this.loadingSignal.set(true);
     return this.http
       .post<{ message: string }>(`${this.apiUrl}/cancel/${token}`, {})
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   /**
@@ -3855,14 +4319,73 @@ export class ReservationService {
     this.loadingSignal.set(true);
     return this.http
       .get<Reservation>(`${this.apiUrl}/reservations/token/${token}`)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   submitReview(payload: { token: string; rating: number; comment: string }): Observable<any> {
     this.loadingSignal.set(true);
     return this.http
       .post(`${this.apiUrl}/reviews/submit`, payload)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
+  }
+}
+
+
+// =================================================================================
+// File: hotel-reservation/src/app/core/services/restaurant.service.ts
+// =================================================================================
+
+
+import { Injectable, signal } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Observable, tap, finalize } from 'rxjs';
+import { environment } from '../../../environments/environment';
+import { Restaurant } from '../models/restaurant.model';
+
+@Injectable({
+  providedIn: 'root',
+})
+export class RestaurantService {
+  private apiUrl = `${environment.apiUrl}/api/v1/restaurants`;
+  
+  loading = signal<boolean>(false);
+
+  constructor(private http: HttpClient) {}
+
+  getAll(): Observable<Restaurant[]> {
+    this.loading.set(true);
+    return this.http.get<Restaurant[]>(this.apiUrl).pipe(
+      finalize(() => this.loading.set(false))
+    );
+  }
+
+  getById(id: string): Observable<Restaurant> {
+    this.loading.set(true);
+    return this.http.get<Restaurant>(`${this.apiUrl}/${id}`).pipe(
+      finalize(() => this.loading.set(false))
+    );
+  }
+
+  // New Methods
+  create(restaurant: Restaurant): Observable<any> {
+    this.loading.set(true);
+    return this.http.post(this.apiUrl, restaurant).pipe(
+      finalize(() => this.loading.set(false))
+    );
+  }
+
+  update(id: string, restaurant: Restaurant): Observable<any> {
+    this.loading.set(true);
+    return this.http.put(`${this.apiUrl}/${id}`, restaurant).pipe(
+      finalize(() => this.loading.set(false))
+    );
+  }
+
+  delete(id: string): Observable<any> {
+    this.loading.set(true);
+    return this.http.delete(`${this.apiUrl}/${id}`).pipe(
+      finalize(() => this.loading.set(false))
+    );
   }
 }
 
@@ -4045,7 +4568,11 @@ describe('AdminSettings', () => {
 // =================================================================================
 
 
-import { Component, OnInit, signal } from '@angular/core';
+// =================================================================================
+// File: hotel-reservation/src/app/features/admin/admin-settings/admin-settings.ts
+// =================================================================================
+
+import { Component, OnInit, signal, ChangeDetectionStrategy, inject, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ConfigService } from '../../../core/services/config.service';
@@ -4058,6 +4585,7 @@ import { LoadingSpinner } from '../../../shared/components/loading-spinner/loadi
   standalone: true,
   imports: [CommonModule, FormsModule, LoadingSpinner],
   templateUrl: './admin-settings.html',
+  changeDetection: ChangeDetectionStrategy.OnPush, 
 })
 export class AdminSettings implements OnInit {
   loading = signal(true);
@@ -4073,6 +4601,9 @@ export class AdminSettings implements OnInit {
     intervalMinutes: 30
   };
 
+  // Inject ChangeDetectorRef to force UI updates when data arrives
+  private cdr = inject(ChangeDetectorRef);
+
   constructor(private configService: ConfigService, private toast: ToastrService) {}
 
   ngOnInit() {
@@ -4080,19 +4611,27 @@ export class AdminSettings implements OnInit {
   }
 
   loadConfigs() {
+    this.loading.set(true);
     this.configService.getAll().subscribe({
       next: (data: { [key: string]: RestaurantConfig }) => {
         this.configs = data || {};
+        
+        // Ensure every restaurant has a config object to prevent template errors
         this.restaurants.forEach(r => {
           if (!this.configs[r]) {
-            this.configs[r] = { ...this.defaultConfig };
+            this.configs[r] = { ...this.defaultConfig, isActive: false }; // Default to closed if config missing
           }
         });
+        
         this.loading.set(false);
+        this.cdr.markForCheck(); // Explicitly update UI
       },
       error: (err: any) => {
-        this.toast.error('Failed to load settings');
+        console.error('Failed to load settings:', err);
+        // Even on error, we stop loading so user isn't stuck
         this.loading.set(false);
+        this.toast.error('Failed to load settings. Check connection.');
+        this.cdr.markForCheck(); // Explicitly update UI even on error
       }
     });
   }
@@ -4106,6 +4645,8 @@ export class AdminSettings implements OnInit {
   saveSettings(name: string) {
     this.saving.set(name);
     const configToSave = this.configs[name];
+    
+    // Ensure the ID is attached
     const payload = { ...configToSave, restaurantId: name };
 
     this.configService.update(name, payload).subscribe({
@@ -4114,7 +4655,7 @@ export class AdminSettings implements OnInit {
         this.saving.set(null);
       },
       error: (err: any) => {
-        this.toast.error(err.message || 'Save failed');
+        this.toast.error(err.error?.detail || 'Save failed');
         this.saving.set(null);
       }
     });
@@ -4841,6 +5382,550 @@ export class ManageCapacities implements OnInit {
 
 
 // =================================================================================
+// File: hotel-reservation/src/app/features/admin/manage-restaurants/manage-restaurants.component.ts
+// =================================================================================
+
+
+import { Component, OnInit, signal } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { Router } from '@angular/router';
+import { RestaurantService } from '../../../core/services/restaurant.service';
+import { Restaurant } from '../../../core/models/restaurant.model';
+import { LoadingSpinner } from '../../../shared/components/loading-spinner/loading-spinner';
+import { ToastrService } from 'ngx-toastr';
+import { LucideAngularModule, Plus, Trash2 } from 'lucide-angular';
+
+@Component({
+  selector: 'app-manage-restaurants',
+  standalone: true,
+  imports: [CommonModule, LoadingSpinner, LucideAngularModule],
+  template: `
+    <div class="max-w-7xl mx-auto p-8">
+      <div class="flex justify-between items-center mb-8">
+        <div>
+          <h1 class="text-3xl font-bold text-gray-800">Restaurant Menus</h1>
+          <p class="text-gray-500 mt-1">Manage content, menus, and media.</p>
+        </div>
+        <button
+          (click)="createNew()"
+          class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2"
+        >
+          <lucide-icon [img]="icons.Plus" class="w-4 h-4"></lucide-icon> Add Restaurant
+        </button>
+      </div>
+
+      @if (loading()) {
+      <app-loading-spinner />
+      } @else {
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        @for (rest of restaurants(); track rest.id) {
+        <div
+          class="bg-white rounded-xl shadow border border-gray-100 overflow-hidden flex flex-col h-full"
+        >
+          <!-- Cover Image Preview -->
+          <div class="h-32 bg-gray-200 relative">
+            <img
+              [src]="rest.media.cardImage"
+              class="w-full h-full object-cover"
+        
+            />
+            <div
+              class="absolute top-2 right-2 px-2 py-1 rounded text-xs font-bold"
+              [class]="rest.isActive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'"
+            >
+              {{ rest.isActive ? 'Active' : 'Hidden' }}
+            </div>
+          </div>
+
+          <div class="p-5 flex-1 flex flex-col">
+            <div class="flex justify-between items-start mb-2">
+              <h3 class="text-xl font-bold text-gray-800">{{ rest.name }}</h3>
+              <span class="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded"
+                >ID: {{ rest.id }}</span
+              >
+            </div>
+
+            <p class="text-sm text-gray-500 line-clamp-2 mb-4">{{ rest.description }}</p>
+
+            <div class="mt-auto pt-4 border-t border-gray-50 flex gap-2">
+              <button
+                (click)="edit(rest.id)"
+                class="flex-1 bg-blue-50 text-blue-600 hover:bg-blue-100 py-2 rounded-lg font-medium text-sm transition"
+              >
+                Edit Menu & Info
+              </button>
+              <button
+                (click)="delete(rest.id)"
+                class="px-3 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg transition"
+              >
+                <lucide-icon [img]="icons.Trash2" class="w-4 h-4"></lucide-icon>
+              </button>
+            </div>
+          </div>
+        </div>
+        }
+      </div>
+      }
+    </div>
+  `,
+})
+export class ManageRestaurantsComponent implements OnInit {
+  restaurants = signal<Restaurant[]>([]);
+  loading = signal(true);
+
+  // Icons
+  readonly icons = { Plus, Trash2 };
+
+  constructor(
+    private restaurantService: RestaurantService,
+    private router: Router,
+    private toast: ToastrService
+  ) {}
+
+  ngOnInit() {
+    this.loadData();
+  }
+
+  loadData() {
+    this.loading.set(true);
+    this.restaurantService.getAll().subscribe({
+      next: (data: Restaurant[]) => {
+        this.restaurants.set(data);
+        this.loading.set(false);
+      },
+      error: () => {
+        this.toast.error('Failed to load restaurants');
+        this.loading.set(false);
+      },
+    });
+  }
+
+  createNew() {
+    this.router.navigate(['/admin/restaurants/new']);
+  }
+
+  edit(id: string) {
+    this.router.navigate(['/admin/restaurants/edit', id]);
+  }
+
+  delete(id: string) {
+    if (confirm(`Are you sure you want to delete ${id}? This cannot be undone.`)) {
+      this.restaurantService.delete(id).subscribe({
+        next: () => {
+          this.toast.success('Restaurant deleted');
+          this.loadData();
+        },
+        error: () => this.toast.error('Delete failed'),
+      });
+    }
+  }
+}
+
+
+// =================================================================================
+// File: hotel-reservation/src/app/features/admin/restaurant-editor/restaurant-editor.component.html
+// =================================================================================
+
+
+<div class="max-w-5xl mx-auto p-8 mb-20">
+  <div class="flex items-center gap-4 mb-6">
+    <button routerLink="/admin/restaurants" class="text-gray-500 hover:text-gray-700">
+      <lucide-icon [img]="icons.ArrowLeft" class="w-6 h-6"></lucide-icon>
+    </button>
+    <h1 class="text-3xl font-bold text-gray-800">{{ isEditMode ? 'Edit' : 'Create' }} Restaurant</h1>
+  </div>
+
+  @if (loading()) {
+    <app-loading-spinner />
+  } @else {
+    <form [formGroup]="form" (ngSubmit)="onSubmit()">
+      
+      <!-- Tabs -->
+      <div class="flex border-b mb-6">
+        <button type="button" (click)="activeTab = 'info'" 
+          [class.border-blue-600]="activeTab === 'info'" [class.text-blue-600]="activeTab === 'info'"
+          class="px-6 py-3 font-medium text-gray-600 border-b-2 border-transparent hover:text-blue-600">
+          Basic Info
+        </button>
+        <button type="button" (click)="activeTab = 'menu'"
+          [class.border-blue-600]="activeTab === 'menu'" [class.text-blue-600]="activeTab === 'menu'"
+          class="px-6 py-3 font-medium text-gray-600 border-b-2 border-transparent hover:text-blue-600">
+          Main Courses
+        </button>
+        <button type="button" (click)="activeTab = 'upsells'"
+          [class.border-blue-600]="activeTab === 'upsells'" [class.text-blue-600]="activeTab === 'upsells'"
+          class="px-6 py-3 font-medium text-gray-600 border-b-2 border-transparent hover:text-blue-600">
+          Upsells (Sushi)
+        </button>
+        <button type="button" (click)="activeTab = 'config'"
+          [class.border-blue-600]="activeTab === 'config'" [class.text-blue-600]="activeTab === 'config'"
+          class="px-6 py-3 font-medium text-gray-600 border-b-2 border-transparent hover:text-blue-600">
+          Settings & Media
+        </button>
+      </div>
+
+      <!-- INFO TAB -->
+      <div [class.hidden]="activeTab !== 'info'" class="space-y-4">
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">ID (Unique)</label>
+            <input formControlName="id" type="text" class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" placeholder="e.g. Italian" />
+            <p class="text-xs text-gray-500 mt-1">Cannot be changed later.</p>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Display Name</label>
+            <input formControlName="name" type="text" class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" placeholder="Italian Restaurant" />
+          </div>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+          <textarea formControlName="description" rows="3" class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"></textarea>
+        </div>
+        <div class="flex items-center gap-4">
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input formControlName="isActive" type="checkbox" class="w-5 h-5 rounded text-blue-600" />
+            <span class="font-medium text-gray-700">Restaurant is Active</span>
+          </label>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1 inline mr-2">Sort Order</label>
+            <input formControlName="order" type="number" class="w-24 inline-block border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+          </div>
+        </div>
+      </div>
+
+      <!-- MENU TAB -->
+      <div [class.hidden]="activeTab !== 'menu'" formGroupName="menuConfig">
+        <div class="mb-4 bg-blue-50 p-4 rounded-lg flex items-center justify-between">
+            <label class="flex items-center gap-2 cursor-pointer">
+                <input formControlName="hasMainCourseSelection" type="checkbox" class="w-5 h-5" />
+                <span class="font-bold text-gray-700">Enable Main Courses</span>
+            </label>
+            <input formControlName="mainCourseLabel" placeholder="Label (e.g. Select Dish)" class="w-64 bg-white border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+        </div>
+
+        @if (form.get('menuConfig.hasMainCourseSelection')?.value) {
+            <div formArrayName="mainCourses" class="space-y-3">
+                @for (course of mainCourses.controls; track $index) {
+                    <div [formGroupName]="$index" class="flex items-start gap-3 p-4 bg-gray-50 rounded border">
+                        <div class="flex-1">
+                            <label class="text-xs text-gray-500">ID (Internal)</label>
+                            <input formControlName="id" placeholder="spaghetti_limone" class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                        </div>
+                        <div class="flex-[2]">
+                            <label class="text-xs text-gray-500">Display Label</label>
+                            <input formControlName="label" placeholder="Spaghetti Al Limone" class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                        </div>
+                        <div class="pt-6">
+                            <label class="flex items-center gap-1 cursor-pointer">
+                                <input formControlName="available" type="checkbox" class="w-4 h-4" />
+                                <span class="text-sm">Avail.</span>
+                            </label>
+                        </div>
+                        <div class="pt-5">
+                            <button type="button" (click)="removeMainCourse($index)" class="text-red-500 hover:bg-red-50 p-2 rounded">
+                                <lucide-icon [img]="icons.Trash2" class="w-5 h-5"></lucide-icon>
+                            </button>
+                        </div>
+                    </div>
+                }
+            </div>
+            <button type="button" (click)="addMainCourse()" class="mt-4 text-blue-600 hover:underline font-medium">+ Add Main Course</button>
+        }
+      </div>
+
+      <!-- UPSELLS TAB -->
+      <div [class.hidden]="activeTab !== 'upsells'" formGroupName="menuConfig">
+        <div class="mb-4 bg-yellow-50 p-4 rounded-lg flex items-center justify-between">
+            <label class="flex items-center gap-2 cursor-pointer">
+                <input formControlName="hasUpsells" type="checkbox" class="w-5 h-5 text-yellow-600" />
+                <span class="font-bold text-gray-700">Enable Upsells (Sushi/Extras)</span>
+            </label>
+            <input formControlName="upsellLabel" placeholder="Label (e.g. Add Sushi)" class="w-64 bg-white border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+        </div>
+
+        @if (form.get('menuConfig.hasUpsells')?.value) {
+            <div formArrayName="upsellItems" class="space-y-3">
+                @for (item of upsellItems.controls; track $index) {
+                    <div [formGroupName]="$index" class="flex items-start gap-3 p-4 bg-gray-50 rounded border border-yellow-200">
+                        <div class="flex-1">
+                            <label class="text-xs text-gray-500">ID</label>
+                            <input formControlName="id" class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                        </div>
+                        <div class="flex-[2]">
+                            <label class="text-xs text-gray-500">Label</label>
+                            <input formControlName="label" class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                        </div>
+                        <div class="w-24">
+                            <label class="text-xs text-gray-500">Price ($)</label>
+                            <input formControlName="price" type="number" class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                        </div>
+                        <div class="w-32">
+                            <label class="text-xs text-gray-500">Category</label>
+                            <input formControlName="category" class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                        </div>
+                        <div class="pt-5">
+                            <button type="button" (click)="removeUpsellItem($index)" class="text-red-500 hover:bg-red-50 p-2 rounded">
+                                <lucide-icon [img]="icons.Trash2" class="w-5 h-5"></lucide-icon>
+                            </button>
+                        </div>
+                    </div>
+                }
+            </div>
+            <button type="button" (click)="addUpsellItem()" class="mt-4 text-blue-600 hover:underline font-medium">+ Add Item</button>
+        }
+      </div>
+
+      <!-- CONFIG TAB -->
+      <div [class.hidden]="activeTab !== 'config'" class="space-y-6">
+        <div formGroupName="config" class="grid grid-cols-2 gap-4 border p-4 rounded-lg bg-gray-50">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Opening Time</label>
+                <input formControlName="openingTime" type="time" class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Closing Time</label>
+                <input formControlName="closingTime" type="time" class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Interval (mins)</label>
+                <select formControlName="timeSlotInterval" class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none bg-white">
+                    <option [ngValue]="15">15 Min</option>
+                    <option [ngValue]="30">30 Min</option>
+                    <option [ngValue]="60">60 Min</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Max Guests/Booking</label>
+                <input formControlName="maxGuestsPerBooking" type="number" class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+            </div>
+        </div>
+
+        <div formGroupName="media" class="space-y-3">
+            <h3 class="font-bold text-gray-700">Media Links (Assets or URLs)</h3>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Card Image URL</label>
+                <input formControlName="cardImage" class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Cover Image URL</label>
+                <input formControlName="coverImage" class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">PDF Menu URL</label>
+                <input formControlName="menuPdfUrl" class="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+            </div>
+        </div>
+      </div>
+
+      <!-- Sticky Action Bar -->
+      <div class="fixed bottom-0 left-0 w-full bg-white border-t p-4 flex justify-end gap-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-40">
+        <button type="button" routerLink="/admin/restaurants" class="px-6 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+        <button type="submit" [disabled]="form.invalid" class="px-8 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 disabled:bg-gray-400">
+            Save Changes
+        </button>
+      </div>
+
+    </form>
+  }
+</div>
+
+
+// =================================================================================
+// File: hotel-reservation/src/app/features/admin/restaurant-editor/restaurant-editor.component.ts
+// =================================================================================
+
+
+import { Component, OnInit, signal } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { FormBuilder, FormGroup, FormArray, ReactiveFormsModule, Validators } from '@angular/forms';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { RestaurantService } from '../../../core/services/restaurant.service';
+import { ToastrService } from 'ngx-toastr';
+import { LucideAngularModule, ArrowLeft, Trash2, Plus } from 'lucide-angular';
+import { LoadingSpinner } from '../../../shared/components/loading-spinner/loading-spinner';
+import { Restaurant } from '../../../core/models/restaurant.model';
+
+@Component({
+  selector: 'app-restaurant-editor',
+  standalone: true,
+  imports: [CommonModule, ReactiveFormsModule, LucideAngularModule, LoadingSpinner, RouterLink],
+  templateUrl: './restaurant-editor.component.html'
+})
+export class RestaurantEditorComponent implements OnInit {
+  form!: FormGroup;
+  isEditMode = false;
+  loading = signal(false);
+  restaurantId: string | null = null;
+  activeTab = 'info'; // 'info', 'menu', 'upsells', 'config'
+
+  // Expose icons to template
+  readonly icons = { ArrowLeft, Trash2, Plus };
+
+  constructor(
+    private fb: FormBuilder,
+    private route: ActivatedRoute,
+    private router: Router,
+    private restaurantService: RestaurantService,
+    private toast: ToastrService
+  ) {
+    this.initForm();
+  }
+
+  ngOnInit() {
+    this.restaurantId = this.route.snapshot.paramMap.get('id');
+    if (this.restaurantId && this.restaurantId !== 'new') {
+      this.isEditMode = true;
+      this.loadData(this.restaurantId);
+    }
+  }
+
+  initForm() {
+    this.form = this.fb.group({
+      id: ['', [Validators.required, Validators.pattern('^[a-zA-Z0-9_-]+$')]],
+      name: ['', Validators.required],
+      description: ['', Validators.required],
+      isActive: [true],
+      order: [1],
+      media: this.fb.group({
+        cardImage: [''],
+        coverImage: [''],
+        menuPdfUrl: ['']
+      }),
+      config: this.fb.group({
+        openingTime: ['18:00', Validators.required],
+        closingTime: ['22:00', Validators.required],
+        timeSlotInterval: [30, Validators.required],
+        maxGuestsPerBooking: [8, Validators.required]
+      }),
+      menuConfig: this.fb.group({
+        hasMainCourseSelection: [true],
+        mainCourseLabel: ['Select your Main Course'],
+        mainCourses: this.fb.array([]),
+        hasUpsells: [false],
+        upsellLabel: ['Add Extras'],
+        upsellItems: this.fb.array([])
+      })
+    });
+  }
+
+  // Helper for Arrays
+  get mainCourses() {
+    return (this.form.get('menuConfig.mainCourses') as FormArray);
+  }
+
+  get upsellItems() {
+    return (this.form.get('menuConfig.upsellItems') as FormArray);
+  }
+
+  addMainCourse() {
+    const courseGroup = this.fb.group({
+      id: ['', Validators.required],
+      label: ['', Validators.required],
+      available: [true]
+    });
+    this.mainCourses.push(courseGroup);
+  }
+
+  removeMainCourse(index: number) {
+    this.mainCourses.removeAt(index);
+  }
+
+  addUpsellItem() {
+    const upsellGroup = this.fb.group({
+      id: ['', Validators.required],
+      label: ['', Validators.required],
+      price: [0, Validators.required],
+      category: ['General']
+    });
+    this.upsellItems.push(upsellGroup);
+  }
+
+  removeUpsellItem(index: number) {
+    this.upsellItems.removeAt(index);
+  }
+
+  loadData(id: string) {
+    this.loading.set(true);
+    this.restaurantService.getById(id).subscribe({
+      next: (data: Restaurant) => {
+        // Patch simple fields
+        this.form.patchValue({
+          id: data.id,
+          name: data.name,
+          description: data.description,
+          isActive: data.isActive,
+          order: data.order,
+          media: data.media,
+          config: data.config,
+          menuConfig: {
+            hasMainCourseSelection: data.menuConfig.hasMainCourseSelection,
+            mainCourseLabel: data.menuConfig.mainCourseLabel,
+            hasUpsells: data.menuConfig.hasUpsells,
+            upsellLabel: data.menuConfig.upsellLabel
+          }
+        });
+
+        if (this.isEditMode) {
+          this.form.get('id')?.disable();
+        }
+
+        // Populate FormArrays
+        data.menuConfig.mainCourses.forEach((item: { id: string, label: string, available: boolean }) => {
+          this.mainCourses.push(this.fb.group({
+            id: [item.id, Validators.required],
+            label: [item.label, Validators.required],
+            available: [item.available]
+          }));
+        });
+
+        data.menuConfig.upsellItems.forEach((item: { id: string, label: string, price: number, category: string }) => {
+          this.upsellItems.push(this.fb.group({
+            id: [item.id, Validators.required],
+            label: [item.label, Validators.required],
+            price: [item.price, Validators.required],
+            category: [item.category]
+          }));
+        });
+
+        this.loading.set(false);
+      },
+      error: () => {
+        this.toast.error('Could not load restaurant');
+        this.router.navigate(['/admin/restaurants']);
+      }
+    });
+  }
+
+  onSubmit() {
+    if (this.form.invalid) {
+      this.toast.warning('Please check the form for errors');
+      return;
+    }
+
+    const payload: Restaurant = this.form.getRawValue();
+
+    if (this.isEditMode) {
+      this.restaurantService.update(payload.id, payload).subscribe({
+        next: () => {
+          this.toast.success('Saved successfully');
+          this.router.navigate(['/admin/restaurants']);
+        },
+        error: () => this.toast.error('Update failed')
+      });
+    } else {
+      this.restaurantService.create(payload).subscribe({
+        next: () => {
+          this.toast.success('Restaurant created');
+          this.router.navigate(['/admin/restaurants']);
+        },
+        error: () => this.toast.error('Creation failed')
+      });
+    }
+  }
+}
+
+
+// =================================================================================
 // File: hotel-reservation/src/app/features/admin/reviews/reviews.html
 // =================================================================================
 
@@ -5023,7 +6108,7 @@ export class Reviews implements OnInit {
 
   loadData() {
     this.loading.set(true);
-    const apiUrl = `${environment.apiUrl}/api`;
+    const apiUrl = `${environment.apiUrl}/api/v1`;
 
     // 1. Get Summary
     const summaryReq = this.http.get(`${apiUrl}/reviews/summary?restaurantId=${this.restaurantId}&period_days=${this.periodDays}`);
@@ -5227,7 +6312,7 @@ export class UploadGuestList {
 // File: hotel-reservation/src/app/features/auth/login/login.component.ts
 // =================================================================================
 
-import { Component, signal, ChangeDetectionStrategy } from '@angular/core';
+import { Component, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -5238,8 +6323,9 @@ import { ToastrService } from 'ngx-toastr';
   selector: 'app-login',
   standalone: true,
   imports: [CommonModule, ReactiveFormsModule],
-  changeDetection: ChangeDetectionStrategy.OnPush, // ✅ Performance Boost
   template: `
+    <!-- ... (Keep your existing template HTML) ... -->
+    <!-- Just ensure the button uses [disabled]="form.invalid || isLoading()" -->
     <div
       class="flex min-h-full flex-col justify-center px-6 py-12 lg:px-8 bg-gray-50 dark:bg-gray-900"
     >
@@ -5346,7 +6432,6 @@ import { ToastrService } from 'ngx-toastr';
 })
 export class LoginComponent {
   form;
-
   showPassword = signal(false);
   isLoading = signal(false);
 
@@ -5372,30 +6457,31 @@ export class LoginComponent {
     this.isLoading.set(true);
     const { email, password } = this.form.value;
 
-    // ✅ FIX: Pass as object
     this.auth.login({ email: email!, password: password! }).subscribe({
-      next: () => {
-        // We don't get { role } directly from login anymore, 
-        // we get it from the authService.user signal
-        const user = this.auth.user(); 
-        const role = user?.role || 'student'; // Default fallback
-        this.redirectBasedOnRole(role);
+      next: (user) => {
+        // ✅ No race condition. We have the user and role here.
+        this.redirectBasedOnRole(user.role);
       },
       error: (err) => {
-        this.toast.error(err.message || 'Login failed');
+        this.toast.error(err.message);
         this.isLoading.set(false);
       },
+      // Note: We don't set isLoading(false) in next() because we are navigating away.
     });
   }
 
   private redirectBasedOnRole(role: string) {
+    // Define dashboard paths
     const routes: Record<string, string> = {
       admin: '/admin/dashboard',
       reception: '/reception/dashboard',
       kitchen: '/kitchen/dashboard',
       accounting: '/accounting/dashboard',
+      guest: '/' // Fallback for pure guests
     };
-    this.router.navigate([routes[role] || '/admin/dashboard']);
+
+    const path = routes[role] || '/';
+    this.router.navigate([path]);
   }
 }
 
@@ -5405,13 +6491,16 @@ export class LoginComponent {
 // =================================================================================
 
 
+// =================================================================================
+// File: hotel-reservation/src/app/features/guest/about/about.component.ts
+// =================================================================================
+
 import { Component } from '@angular/core';
-import { TranslateModule } from '@ngx-translate/core';
 
 @Component({
   selector: 'app-about',
   standalone: true,
-  imports: [TranslateModule],
+  imports: [],
   template: `
     <div class="max-w-4xl mx-auto p-8 bg-white mt-10 rounded-xl shadow pt-24 md:pt-28">
       <h1 class="text-3xl font-bold mb-4 text-gray-800">
@@ -5476,14 +6565,18 @@ export class AboutComponent {}
 // =================================================================================
 
 
+// =================================================================================
+// File: hotel-reservation/src/app/features/guest/confirmation/confirmation.component.ts
+// =================================================================================
+
 import { Component } from '@angular/core';
 import { Router } from '@angular/router';
-import { TranslateModule } from '@ngx-translate/core';
+import { CommonModule } from '@angular/common';
 
 @Component({
   selector: 'app-confirmation',
   standalone: true,
-  imports: [TranslateModule],
+  imports: [CommonModule],
   template: `
     <div class="min-h-screen bg-slate-50 flex justify-center pt-20 md:pt-28">
       <div class="w-full max-w-lg md:max-w-4xl px-4 py-6">
@@ -5495,22 +6588,22 @@ import { TranslateModule } from '@ngx-translate/core';
             </div>
           </div>
           <h2 class="text-2xl font-bold text-green-600 md:text-3xl">
-            {{ 'confirmation.title' | translate }}
+            Reservation Confirmed!
           </h2>
           <p class="text-slate-700 mt-2 md:text-lg">
-            {{ 'confirmation.message' | translate }}
+            We have sent the details to your email.
           </p>
           <button
             (click)="router.navigate(['/'])"
             class="mt-6 bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition"
           >
-            {{ 'confirmation.backHome' | translate }}
+            Return to Home
           </button>
         </div>
 
         <!-- Recommendation -->
         <h3 class="mt-8 text-xl font-semibold text-slate-900">
-          {{ 'recommendations.heading' | translate }}
+          While you are here...
         </h3>
 
         <article class="mt-4 bg-white rounded-2xl shadow overflow-hidden flex flex-col md:flex-row">
@@ -5521,13 +6614,13 @@ import { TranslateModule } from '@ngx-translate/core';
           />
           <div class="p-4 md:p-6 flex flex-col justify-center md:w-1/2 text-center md:text-left">
             <h4 class="text-2xl font-bold text-slate-900">
-              {{ 'cabanas.title' | translate }}
+              Private Beach Cabanas
             </h4>
             <p class="mt-1 text-slate-700">
-              {{ 'cabanas.description' | translate }}
+              Relax in luxury with our exclusive beach cabanas.
             </p>
             <p class="mt-4 text-sm text-slate-600 italic">
-              {{ 'cabanas.notice' | translate }}
+              Ask reception for availability.
             </p>
           </div>
         </article>
@@ -5545,13 +6638,16 @@ export class ConfirmationComponent {
 // =================================================================================
 
 
+// =================================================================================
+// File: hotel-reservation/src/app/features/guest/contact/contact.component.ts
+// =================================================================================
+
 import { Component } from '@angular/core';
-import { TranslateModule } from '@ngx-translate/core';
 
 @Component({
   selector: 'app-contact',
   standalone: true,
-  imports: [TranslateModule],
+  imports: [],
   template: `
     <div class="max-w-4xl mx-auto p-8 bg-white mt-10 rounded-xl shadow pt-24 md:pt-28">
       <h1 class="text-3xl font-bold mb-4 text-gray-800">Contact Us</h1>
@@ -5744,164 +6840,199 @@ export class GuestCancel implements OnInit {
 // =================================================================================
 
 
+// =================================================================================
+// File: hotel-reservation/src/app/features/guest/home/home.component.ts
+// =================================================================================
+
 import { Component, OnInit, OnDestroy, signal, ElementRef, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
-import { TranslateModule } from '@ngx-translate/core';
 import { interval, Subscription } from 'rxjs';
-
-interface Restaurant {
-  id: string;
-  nameKey: string;
-  descKey: string;
-  image: string;
-  disabled?: boolean;
-}
+import { RestaurantService } from '../../../core/services/restaurant.service';
+import { Restaurant } from '../../../core/models/restaurant.model';
+import { LoadingSpinner } from '../../../shared/components/loading-spinner/loading-spinner';
+import { AuthService } from '../../../core/services/auth.service';
 
 @Component({
   selector: 'app-home',
   standalone: true,
-  imports: [CommonModule, TranslateModule],
+  imports: [CommonModule, LoadingSpinner],
   template: `
-    <div class="flex justify-center min-h-screen p-6 pt-24 md:pt-28 bg-white">
-      <div class="max-w-7xl mx-auto w-full p-0 space-y-16">
-        <!-- Gallery Slideshow -->
-        <div class="mb-16 bg-gradient-to-b from-[#f8fafc] to-[#eef2f7] rounded-2xl">
-          <div
-            class="relative w-full overflow-hidden rounded-2xl shadow-lg h-[520px] md:h-[720px] lg:h-[820px]"
-          >
-            <!-- Slider Track -->
-            <div
-              class="flex h-full will-change-transform transition-transform duration-[1000ms] ease-in-out"
+    <div class="flex flex-col min-h-screen bg-gray-50">
+      
+      <!-- HERO SECTION -->
+      <div class="relative w-full h-[85vh] md:h-[800px] overflow-hidden">
+        <div class="absolute inset-0">
+             <div
+              class="flex h-full w-full transition-transform duration-[1500ms] ease-in-out will-change-transform"
               [style.transform]="'translateX(-' + currentIndex() * 100 + '%)'"
             >
               @for (img of images; track $index) {
-              <img
-                [src]="img"
-                class="flex-shrink-0 w-full h-full object-cover"
-                alt="Gallery"
-                loading="lazy"
-              />
+              <div class="w-full h-full flex-shrink-0 relative">
+                 <img [src]="img" class="w-full h-full object-cover" alt="Resort View" loading="lazy" />
+                 <div class="absolute inset-0 bg-black/40"></div> 
+              </div>
               }
             </div>
-
-            <!-- Overlay -->
-            <div
-              class="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/50 via-black/20 to-transparent rounded-2xl"
-            ></div>
-
-            <!-- Hero Text -->
-            <div class="absolute inset-x-0 bottom-0 p-6 md:p-10 text-white">
-              <h1 class="text-3xl md:text-5xl font-bold drop-shadow-sm">
-                {{ 'welcome_message' | translate }}
-              </h1>
-              <p class="mt-2 md:mt-3 text-sm md:text-base max-w-2xl drop-shadow-sm">
-                {{ 'welcome_sub' | translate }}
-              </p>
-              <div class="mt-4 md:mt-6">
-                <button
-                  (click)="scrollToRestaurants()"
-                  class="pointer-events-auto inline-flex items-center gap-2 bg-orange-700 hover:bg-orange-600 text-white font-semibold px-5 py-3 rounded-full shadow"
-                >
-                  {{ 'Button' | translate }}
-                  <svg
-                    class="h-4 w-4"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M5 12h14M12 5l7 7-7 7"
-                    />
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </div>
         </div>
 
-        <!-- Restaurants Grid -->
-        <section #restaurantSection class="bg-white rounded-3xl p-8 md:p-10 shadow-xl">
-          <h2 class="text-3xl md:text-4xl font-bold text-center mb-10">
-            {{ 'pick_restaurant' | translate }}
-          </h2>
-
-          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-            @for (item of restaurants; track item.id) {
-            <button
-              (click)="navigateToReservation(item.id)"
-              [disabled]="item.disabled"
-              class="group relative w-full rounded-3xl border border-gray-200 bg-white text-left overflow-hidden transition focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-300 hover:shadow-2xl hover:-translate-y-0.5 disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              <div
-                class="aspect-[4/3] bg-white overflow-hidden ring-1 ring-slate-100 rounded-t-3xl"
-              >
-                <img
-                  [src]="item.image"
-                  class="h-full w-full object-contain p-6 transition duration-300 group-hover:scale-[1.03]"
-                  [alt]="item.nameKey | translate"
-                />
-              </div>
-              <div class="p-6">
-                @if (item.disabled) {
-                <h3 class="text-xl font-bold text-gray-800">
-                  {{ 'fish_reservation_heading' | translate }}
-                </h3>
-                <p class="text-gray-500 italic mt-1">
-                  {{ 'fish_reservation_subtext' | translate }}
-                </p>
-                } @else {
-                <h3 class="text-xl font-bold text-gray-800">{{ item.nameKey | translate }}</h3>
-                <p class="text-gray-500 mt-1">{{ item.descKey | translate }}</p>
-                <div class="mt-4">
-                  <span
-                    class="inline-flex items-center px-4 py-2 rounded-full bg-orange-700 text-white text-sm font-semibold group-hover:bg-orange-600"
-                  >
-                    {{ 'reserve_now' | translate }}
-                  </span>
-                </div>
-                }
-              </div>
-            </button>
-            }
+        <div class="absolute inset-0 flex items-center justify-center text-center px-4 z-10">
+          <div class="max-w-4xl space-y-6 animate-fade-in">
+             <span class="inline-block py-1 px-3 rounded-full bg-white/20 backdrop-blur text-white text-sm font-semibold tracking-wider uppercase border border-white/30 mb-2">
+               Welcome to Paradise
+             </span>
+             <h1 class="text-5xl md:text-7xl font-bold text-white drop-shadow-lg leading-tight">
+               Experience Dining <br/> <span class="text-orange-400">Reimagined</span>
+             </h1>
+             <p class="text-lg md:text-xl text-gray-100 max-w-2xl mx-auto drop-shadow-md">
+               Book your table at our exclusive A La Carte restaurants. 
+               Manage your reservations and explore world-class cuisine effortlessly.
+             </p>
+             
+             <div class="flex flex-col sm:flex-row gap-4 justify-center mt-8">
+               <button 
+                 (click)="scrollToRestaurants()"
+                 class="px-8 py-4 bg-orange-600 hover:bg-orange-700 text-white text-lg font-bold rounded-full transition shadow-xl hover:shadow-2xl transform hover:-translate-y-1"
+               >
+                 Book a Table
+               </button>
+               
+               @if (!isLoggedIn()) {
+                 <button 
+                   (click)="navigateToLogin()"
+                   class="px-8 py-4 bg-white/10 hover:bg-white/20 backdrop-blur border border-white/40 text-white text-lg font-bold rounded-full transition"
+                 >
+                   Staff Login
+                 </button>
+               }
+             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- RESTAURANTS SECTION -->
+      <div class="max-w-7xl mx-auto w-full px-4 sm:px-6 py-20 -mt-20 relative z-20">
+        <section #restaurantSection class="bg-white rounded-[2rem] p-8 md:p-12 shadow-2xl border border-gray-100">
+          <div class="text-center mb-12">
+            <h2 class="text-3xl md:text-4xl font-bold text-gray-900">
+              Pick Your Restaurant
+            </h2>
+            <p class="text-gray-500 mt-3">Select a venue to check availability and menu</p>
+          </div>
+
+          @if (loading()) {
+            <app-loading-spinner />
+          } @else {
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+              @for (item of restaurants(); track item.id) {
+              <button
+                (click)="navigateToReservation(item.id)"
+                [disabled]="!item.isActive"
+                class="group flex flex-col w-full h-full text-left rounded-2xl overflow-hidden bg-gray-50 border border-gray-100 transition hover:shadow-xl hover:-translate-y-1 focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <!-- Card Image -->
+                <div class="aspect-[4/3] w-full overflow-hidden relative">
+                   <img
+                    [src]="item.media.cardImage"
+                    class="h-full w-full object-cover transition duration-700 group-hover:scale-110"
+                    [alt]="item.name"
+                  />
+                  @if (!item.isActive) {
+                    <div class="absolute inset-0 bg-gray-900/60 flex items-center justify-center">
+                      <span class="text-white font-bold px-3 py-1 border border-white rounded">CLOSED</span>
+                    </div>
+                  }
+                </div>
+                
+                <!-- Card Content -->
+                <div class="p-5 flex-1 flex flex-col">
+                  <h3 class="text-lg font-bold text-gray-900 group-hover:text-orange-600 transition-colors">
+                    {{ item.name }}
+                  </h3>
+                  <p class="text-sm text-gray-500 mt-2 line-clamp-2 flex-1">
+                    {{ item.description }}
+                  </p>
+                  
+                  <div class="mt-4 pt-4 border-t border-gray-200 flex items-center justify-between">
+                    <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                      {{ item.config.openingTime }} - {{ item.config.closingTime }}
+                    </span>
+                    <span class="w-8 h-8 rounded-full bg-white shadow flex items-center justify-center text-orange-600 group-hover:bg-orange-600 group-hover:text-white transition-colors">
+                      ➜
+                    </span>
+                  </div>
+                </div>
+              </button>
+              }
+            </div>
+          }
         </section>
       </div>
+      
+      <!-- Features -->
+      <div class="max-w-7xl mx-auto px-6 py-16 grid md:grid-cols-3 gap-8 text-center">
+         <div class="p-6">
+           <div class="w-16 h-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4 text-2xl">📅</div>
+           <h3 class="text-xl font-bold text-gray-800 mb-2">Instant Booking</h3>
+           <p class="text-gray-600">Real-time availability checks for all our restaurants.</p>
+         </div>
+         <div class="p-6">
+           <div class="w-16 h-16 bg-green-50 text-green-600 rounded-2xl flex items-center justify-center mx-auto mb-4 text-2xl">🍣</div>
+           <h3 class="text-xl font-bold text-gray-800 mb-2">Menu & Upsells</h3>
+           <p class="text-gray-600">Pre-order special items like Sushi directly from the app.</p>
+         </div>
+         <div class="p-6">
+           <div class="w-16 h-16 bg-purple-50 text-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-4 text-2xl">⭐</div>
+           <h3 class="text-xl font-bold text-gray-800 mb-2">Feedback Loop</h3>
+           <p class="text-gray-600">Share your dining experience to help us serve you better.</p>
+         </div>
+      </div>
+
     </div>
   `,
+  styles: [`
+    .animate-fade-in { animation: fadeIn 1s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+  `]
 })
 export class HomeComponent implements OnInit, OnDestroy {
   @ViewChild('restaurantSection') restaurantSection!: ElementRef;
 
   currentIndex = signal(0);
-  images = Array.from({ length: 7 }, (_, i) => `/gallery/${i + 1}.jpg`);
+  images = [
+    'assets/images/hotel-hero.jpg',
+    'assets/images/italian-cover.jpg',
+    'assets/images/chinese-cover.jpg'
+  ];
   private timerSub?: Subscription;
 
-  restaurants: Restaurant[] = [
-    { id: 'Indian', nameKey: 'indian_name', descKey: 'indian_desc', image: 'assets/images/indian.png' },
-    {
-      id: 'Chinese',
-      nameKey: 'chinese_name',
-      descKey: 'chinese_desc',
-      image: 'assets/images/chinese.png',
-    },
-    {
-      id: 'Italian',
-      nameKey: 'italian_name',
-      descKey: 'italian_desc',
-      image: 'assets/images/italian.png',
-    },
-  ];
+  restaurants = signal<Restaurant[]>([]);
+  loading = signal(true);
+  isLoggedIn = signal(false);
 
-  constructor(private router: Router) {}
+  constructor(
+    private router: Router,
+    private restaurantService: RestaurantService,
+    private authService: AuthService
+  ) {}
 
   ngOnInit() {
-    this.timerSub = interval(3000).subscribe(() => {
+    this.timerSub = interval(5000).subscribe(() => {
       this.currentIndex.update((i) => (i + 1) % this.images.length);
     });
+
+    this.restaurantService.getAll().subscribe({
+      next: (data) => {
+        this.restaurants.set(data);
+        this.loading.set(false);
+      },
+      error: (err) => {
+        console.error('Failed to load restaurants', err);
+        this.loading.set(false);
+      }
+    });
+    
+    this.isLoggedIn.set(!!this.authService.user());
   }
 
   ngOnDestroy() {
@@ -5914,6 +7045,10 @@ export class HomeComponent implements OnInit, OnDestroy {
 
   navigateToReservation(id: string) {
     this.router.navigate(['/reservation', id]);
+  }
+
+  navigateToLogin() {
+    this.router.navigate(['/login']);
   }
 }
 
@@ -6154,26 +7289,216 @@ export class ModifyReservation implements OnInit {
 
 
 // =================================================================================
-// File: hotel-reservation/src/app/features/guest/reservation-form/reservation-form.component.ts
+// File: hotel-reservation/src/app/features/guest/reservation-form/reservation-form.component.html
 // =================================================================================
+
+
+<div class="max-w-6xl mx-auto pt-24 md:pt-28 grid grid-cols-1 md:grid-cols-2 gap-6 p-4 mb-12">
+
+    <!-- Left Side: Menu Preview -->
+    <div class="bg-white shadow rounded-2xl p-6 flex flex-col items-center h-fit">
+        <h3 class="text-lg font-semibold text-gray-700 mb-4">Restaurant Menu</h3>
+
+        @if (restaurant(); as rest) {
+        <div class="w-full h-[500px] border rounded bg-gray-100 overflow-hidden relative">
+            <iframe [src]="menuUrl()" class="w-full h-full" title="Restaurant Menu"></iframe>
+        </div>
+        <a [href]="rest.media.menuPdfUrl" target="_blank" rel="noopener noreferrer"
+            class="mt-4 bg-[#006494] text-white px-4 py-2 rounded hover:bg-[#005377] transition">
+            Download Menu PDF
+        </a>
+        }
+    </div>
+
+    <!-- Right Side: Form -->
+    <div class="bg-white shadow rounded-2xl p-4 sm:p-8">
+        @if (loadingConfig()) {
+        <app-loading-spinner />
+        } @else if (restaurant() && !restaurant()?.isActive) {
+        <div class="text-center py-10">
+            <div class="bg-red-50 border border-red-200 text-red-700 p-6 rounded-xl">
+                <h2 class="text-2xl font-bold mb-2">Restaurant Closed</h2>
+                <p>This restaurant is currently not accepting reservations.</p>
+                <button (click)="router.navigate(['/'])" class="mt-4 text-blue-600 underline">Back to Home</button>
+            </div>
+        </div>
+        } @else {
+        <h2 class="text-2xl font-bold mb-6 text-gray-800">Book a Table</h2>
+
+        <form [formGroup]="form" (ngSubmit)="onSubmit()" class="space-y-5">
+            <!-- Date, Time, Guests Fields -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Select Date</label>
+                <select formControlName="date" class="w-full border p-3 rounded-md focus:ring-2 focus:ring-blue-500">
+                    <option value="">Select Date</option>
+                    @for (day of availableDates(); track day.iso) {
+                    <option [value]="day.iso" [disabled]="day.disabled">
+                        {{ day.label }} {{ day.disabled ? '(Unavailable)' : '' }}
+                    </option>
+                    }
+                </select>
+                @if (spotsLeft() !== null && spotsLeft()! <= 4 && spotsLeft()!> 0) {
+                    <div class="text-yellow-600 text-sm mt-1 flex items-center gap-1">
+                        <lucide-icon name="info" class="w-4 h-4"></lucide-icon> Only {{ spotsLeft() }} spots left!
+                    </div>
+                    }
+                    @if (spotsLeft() === 0) {
+                    <div class="text-red-600 text-sm mt-1">❌ Fully booked</div>
+                    }
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Time</label>
+                <select formControlName="time" class="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500">
+                    @for (t of availableTimeSlots(); track t) {
+                    <option [value]="t">{{ t }}</option>
+                    }
+                </select>
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Number of Guests</label>
+                <select formControlName="guests" (change)="onGuestsChange()"
+                    class="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500">
+                    @for (n of [1,2,3,4]; track n) {
+                    <option [value]="n">{{ n }}</option>
+                    }
+                </select>
+            </div>
+
+            <!-- User Details -->
+            <div class="grid grid-cols-2 gap-4">
+                <input type="number" formControlName="room" placeholder="Room Number"
+                    class="w-full border p-2 rounded" />
+                <input type="email" formControlName="email" placeholder="Email Address"
+                    class="w-full border p-2 rounded" />
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <input type="text" formControlName="first_name" placeholder="First Name"
+                    class="w-full border p-2 rounded" />
+                <input type="text" formControlName="last_name" placeholder="Last Name"
+                    class="w-full border p-2 rounded" />
+            </div>
+
+            <!-- Dynamic Main Courses -->
+            @if (restaurant()?.menuConfig?.hasMainCourseSelection) {
+            <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                <label class="block text-gray-700 font-medium mb-3">
+                    {{ restaurant()?.menuConfig?.mainCourseLabel || 'Select Main Course' }} (Per Guest)
+                </label>
+
+                <div formArrayName="main_courses" class="space-y-3">
+                    @for (control of mainCoursesArray.controls; track $index) {
+                    <div class="flex flex-col sm:flex-row sm:items-center gap-3">
+                        <span class="text-sm font-medium text-gray-500 w-16">Guest {{ $index + 1 }}:</span>
+
+                        <div class="flex flex-wrap gap-2">
+                            @for (opt of restaurant()?.menuConfig?.mainCourses; track opt.id) {
+                            <button type="button" [class.bg-yellow-100]="control.value === opt.id"
+                                [class.border-yellow-400]="control.value === opt.id"
+                                [class.text-yellow-800]="control.value === opt.id"
+                                class="px-3 py-2 text-sm border rounded hover:bg-gray-50 transition"
+                                (click)="control.setValue(opt.id)">
+                                {{ opt.label }}
+                            </button>
+                            }
+                        </div>
+                    </div>
+                    }
+                </div>
+            </div>
+            }
+
+            <!-- Dynamic Upsell Summary -->
+            @if (restaurant()?.menuConfig?.hasUpsells && hasSelectedSushi()) {
+            <div class="bg-yellow-50 border border-yellow-200 p-3 rounded text-sm text-yellow-800">
+                <strong>Extra Items Added:</strong> ${{ calculateSushiTotal() }}
+            </div>
+            }
+
+            <textarea formControlName="comments" rows="3" placeholder="Any allergies or special requests?"
+                class="w-full border p-2 rounded"></textarea>
+
+            <button type="submit" [disabled]="form.invalid || submitting()"
+                class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 disabled:bg-gray-400 transition">
+                {{ submitting() ? 'Booking...' : 'Confirm Reservation' }}
+            </button>
+        </form>
+        }
+    </div>
+</div>
+
+<!-- Upsell Modal (Dynamic) -->
+@if (showSushiModal()) {
+<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+
+        <div class="p-6 border-b flex justify-between items-center">
+            <h3 class="text-xl font-bold text-gray-800">{{ restaurant()?.menuConfig?.upsellLabel }}</h3>
+            <button (click)="closeSushiModal()" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+        </div>
+
+        <div class="p-6 overflow-y-auto flex-1" [formGroup]="upsellForm">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                @for (item of restaurant()?.menuConfig?.upsellItems || []; track item.id) {
+                <div class="flex justify-between items-center border-b pb-2">
+                    <div>
+                        <div class="font-medium text-gray-800">{{ item.label }}</div>
+                        <div class="text-sm text-gray-500">${{ item.price }}</div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button type="button" (click)="decrementSushi(item.id)"
+                            class="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 flex items-center justify-center font-bold">-</button>
+                        <span class="w-6 text-center font-medium">{{ upsellForm.get(item.id)?.value || 0 }}</span>
+                        <button type="button" (click)="incrementSushi(item.id)"
+                            class="w-8 h-8 rounded-full bg-blue-100 hover:bg-blue-200 text-blue-600 flex items-center justify-center font-bold">+</button>
+                    </div>
+                </div>
+                }
+            </div>
+        </div>
+
+        <div class="p-6 border-t bg-gray-50 rounded-b-2xl flex justify-between items-center">
+            <div>
+                <span class="block text-xs text-gray-500 uppercase font-bold">Total Extra</span>
+                <span class="text-2xl font-bold text-blue-600">${{ calculateSushiTotal() }}</span>
+            </div>
+            <div class="flex gap-3">
+                <button (click)="submitWithoutSushi()"
+                    class="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded-lg transition">Skip</button>
+                <button (click)="submitWithSushi()"
+                    class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition shadow-lg">Confirm
+                    & Book</button>
+            </div>
+        </div>
+    </div>
+</div>
+}
 
 
 // =================================================================================
 // File: hotel-reservation/src/app/features/guest/reservation-form/reservation-form.component.ts
 // =================================================================================
 
-import { Component, OnInit, signal, ChangeDetectionStrategy, inject } from '@angular/core';
+
+// =================================================================================
+// File: hotel-reservation/src/app/features/guest/reservation-form/reservation-form.component.ts
+// =================================================================================
+
+import { Component, OnInit, signal, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, FormGroup, FormArray, ReactiveFormsModule, Validators } from '@angular/forms';
+import { firstValueFrom } from 'rxjs';
 import { ActivatedRoute, Router } from '@angular/router';
-import { TranslateModule } from '@ngx-translate/core';
 import { ToastrService } from 'ngx-toastr';
 import { ReservationService } from '../../../core/services/reservation.service';
-import { ConfigService } from '../../../core/services/config.service';
+import { RestaurantService } from '../../../core/services/restaurant.service'; 
 import { CapacityService } from '../../../core/services/capacity.service';
 import { LoadingSpinner } from '../../../shared/components/loading-spinner/loading-spinner';
 import { LucideAngularModule } from 'lucide-angular';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { Restaurant } from '../../../core/models/restaurant.model'; 
+import { DomSanitizer } from '@angular/platform-browser';
 
 @Component({
   selector: 'app-reservation-form',
@@ -6181,209 +7506,50 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
   imports: [
     CommonModule,
     ReactiveFormsModule,
-    TranslateModule,
     LoadingSpinner,
-    LucideAngularModule
+    LucideAngularModule,
   ],
-  changeDetection: ChangeDetectionStrategy.OnPush, // ✅ Performance Boost
-  template: `
-    <!-- Template remains exactly the same as previous iteration -->
-    <div class="max-w-6xl mx-auto pt-24 md:pt-28 grid grid-cols-1 md:grid-cols-2 gap-6 p-4 mb-12">
-      <!-- ... (content omitted for brevity, same as before) ... -->
-      <!-- Left Side -->
-      <div class="bg-white shadow rounded-2xl p-6 flex flex-col items-center h-fit">
-        <h3 class="text-lg font-semibold text-gray-700 mb-4">{{ 'restaurant_menu' | translate }}</h3>
-        <div class="w-full h-[500px] border rounded bg-gray-100 overflow-hidden relative">
-            <iframe [src]="menuUrl()" class="w-full h-full" title="Restaurant Menu"></iframe>
-        </div>
-        <a [href]="menuUrl()" target="_blank" rel="noopener noreferrer" class="mt-4 bg-[#006494] text-white px-4 py-2 rounded hover:bg-[#005377] transition">
-          {{ 'menu_button' | translate }}
-        </a>
-      </div>
-
-      <!-- Right Side -->
-      <div class="bg-white shadow rounded-2xl p-4 sm:p-8">
-        @if (loadingConfig()) {
-          <app-loading-spinner />
-        } @else if (!isRestaurantActive()) {
-           <div class="text-center py-10">
-             <div class="bg-red-50 border border-red-200 text-red-700 p-6 rounded-xl">
-               <h2 class="text-2xl font-bold mb-2">Restaurant Closed</h2>
-               <p>The {{ restaurantId() }} restaurant is currently not accepting reservations.</p>
-               <button (click)="router.navigate(['/'])" class="mt-4 text-blue-600 underline">Back to Home</button>
-             </div>
-           </div>
-        } @else {
-          <h2 class="text-2xl font-bold mb-6 text-gray-800">{{ 'book_table' | translate }}</h2>
-          
-          <form [formGroup]="form" (ngSubmit)="onSubmit()" class="space-y-5">
-             <!-- Fields -->
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">{{ 'select_date' | translate }}</label>
-              <select formControlName="date" class="w-full border p-3 rounded-md focus:ring-2 focus:ring-blue-500">
-                <option value="">{{ 'select_date' | translate }}</option>
-                @for (day of availableDates(); track day.iso) {
-                  <option [value]="day.iso" [disabled]="day.disabled">
-                    {{ day.label }} {{ day.disabled ? '(Unavailable)' : '' }}
-                  </option>
-                }
-              </select>
-              @if (spotsLeft() !== null && spotsLeft()! <= 4 && spotsLeft()! > 0) {
-                <div class="text-yellow-600 text-sm mt-1 flex items-center gap-1">
-                  <lucide-icon name="info" class="w-4 h-4"></lucide-icon> Only {{ spotsLeft() }} spots left!
-                </div>
-              }
-              @if (spotsLeft() === 0) {
-                <div class="text-red-600 text-sm mt-1">❌ Fully booked</div>
-              }
-            </div>
-
-             <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">Time</label>
-              <select formControlName="time" class="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500">
-                @for (t of availableTimeSlots(); track t) {
-                  <option [value]="t">{{ t }}</option>
-                }
-              </select>
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-1">{{ 'number_of_guests' | translate }}</label>
-              <select formControlName="guests" (change)="onGuestsChange()" class="w-full border p-2 rounded focus:ring-2 focus:ring-blue-500">
-                @for (n of [1,2,3,4]; track n) {
-                  <option [value]="n">{{ n }}</option>
-                }
-              </select>
-            </div>
-
-            <div class="grid grid-cols-2 gap-4">
-              <input type="number" formControlName="room" [placeholder]="'room_number' | translate" class="w-full border p-2 rounded" />
-              <input type="email" formControlName="email" [placeholder]="'email' | translate" class="w-full border p-2 rounded" />
-            </div>
-            <div class="grid grid-cols-2 gap-4">
-              <input type="text" formControlName="first_name" [placeholder]="'first_name' | translate" class="w-full border p-2 rounded" />
-              <input type="text" formControlName="last_name" [placeholder]="'last_name' | translate" class="w-full border p-2 rounded" />
-            </div>
-
-            @if (['Chinese', 'Indian', 'Italian'].includes(restaurantId() || '')) {
-              <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                <label class="block text-gray-700 font-medium mb-3">
-                  {{ 'select_main_course' | translate }} (Per Guest)
-                </label>
-                
-                <div formArrayName="main_courses" class="space-y-3">
-                  @for (control of mainCoursesArray.controls; track $index) {
-                    <div class="flex flex-col sm:flex-row sm:items-center gap-3">
-                      <span class="text-sm font-medium text-gray-500 w-16">Guest {{ $index + 1 }}:</span>
-                      
-                      @if (restaurantId() === 'Italian') {
-                         <div class="flex flex-wrap gap-2">
-                           @for (opt of italianOptions; track opt.val) {
-                             <button type="button" 
-                               [class.bg-yellow-100]="control.value === opt.val"
-                               [class.border-yellow-400]="control.value === opt.val"
-                               [class.text-yellow-800]="control.value === opt.val"
-                               class="px-3 py-2 text-sm border rounded hover:bg-gray-50 transition"
-                               (click)="control.setValue(opt.val)">
-                               {{ opt.label | translate }}
-                             </button>
-                           }
-                         </div>
-                      } @else {
-                        <div class="flex gap-2">
-                          <button type="button" 
-                             [class.bg-yellow-100]="control.value === 'chicken'"
-                             class="px-4 py-2 border rounded hover:bg-gray-50"
-                             (click)="control.setValue('chicken')">
-                             {{ 'chicken' | translate }}
-                          </button>
-                          <button type="button" 
-                             [class.bg-yellow-100]="control.value === 'meat'"
-                             class="px-4 py-2 border rounded hover:bg-gray-50"
-                             (click)="control.setValue('meat')">
-                             {{ 'meat' | translate }}
-                          </button>
-                        </div>
-                      }
-                    </div>
-                  }
-                </div>
-              </div>
-            }
-
-            @if (restaurantId() === 'Chinese' && hasSelectedSushi()) {
-               <div class="bg-yellow-50 border border-yellow-200 p-3 rounded text-sm text-yellow-800">
-                 <strong>🍣 Sushi Added:</strong> \${{ calculateSushiTotal() }} (Extra Charge)
-               </div>
-            }
-
-            <textarea formControlName="comments" rows="3" [placeholder]="'comments_placeholder' | translate" class="w-full border p-2 rounded"></textarea>
-
-            <button type="submit" [disabled]="form.invalid || submitting()" class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 disabled:bg-gray-400 transition">
-              {{ submitting() ? ('sending' | translate) : ('confirm_reservation' | translate) }}
-            </button>
-          </form>
-        }
-      </div>
-    </div>
-    <!-- ... (Sushi Modal omitted, same as before) ... -->
-  `
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  templateUrl: './reservation-form.component.html',
 })
 export class ReservationFormComponent implements OnInit {
   form!: FormGroup;
   restaurantId = signal<string | null>(null);
+  restaurant = signal<Restaurant | null>(null);
   loadingConfig = signal(true);
   submitting = signal(false);
-  isRestaurantActive = signal(true);
-  
+
   availableDates = signal<any[]>([]);
-  availableTimeSlots = signal<string[]>(['19:00']);
+  availableTimeSlots = signal<string[]>([]);
   spotsLeft = signal<number | null>(null);
   showSushiModal = signal(false);
-
-  // Static Data
-  italianOptions = [
-    { val: 'quatro_formagi', label: 'quatro_formagi' },
-    { val: 'chicken_pizza', label: 'chicken_pizza' },
-    { val: 'petto_chicken', label: 'petto_chicken' }
-  ];
-
-  sushiCategories = [
-    { key: 'hot_rolls', label: 'sushi_categories.hot_rolls', items: [
-      { name: 'Hot Dynamites', price: 4 }, { name: 'Hot Crab', price: 4 }, { name: 'Hot Dragon', price: 4 }
-    ]},
-    { key: 'maki_rolls', label: 'sushi_categories.maki_rolls', items: [
-      { name: 'Sake Maki', price: 3 }, { name: 'Seagull Roll', price: 5 }, { name: 'Kappa Roll', price: 2 }, { name: 'Kabi Maki', price: 4 }
-    ]}
-  ];
-
-  allSushiItems = this.sushiCategories.flatMap(c => c.items);
 
   constructor(
     private fb: FormBuilder,
     private route: ActivatedRoute,
     public router: Router,
     private reservationService: ReservationService,
-    private configService: ConfigService,
+    private restaurantService: RestaurantService,
     private capacityService: CapacityService,
-    private toast: ToastrService
+    private toast: ToastrService,
+    private sanitizer: DomSanitizer
   ) {
     this.initForm();
-    
-    // ✅ Fix: Prevent memory leak
-    this.form.get('date')?.valueChanges
-      .pipe(takeUntilDestroyed())
-      .subscribe(date => {
+
+    this.form
+      .get('date')
+      ?.valueChanges.pipe(takeUntilDestroyed())
+      .subscribe((date) => {
         if (date) this.checkCapacity(date);
       });
   }
 
   ngOnInit() {
-    this.route.paramMap.subscribe(params => {
+    this.route.paramMap.subscribe((params) => {
       const id = params.get('restaurantId');
       if (id) {
         this.restaurantId.set(id);
-        this.loadConfigAndDates(id);
+        this.loadRestaurantData(id);
       }
     });
   }
@@ -6391,7 +7557,7 @@ export class ReservationFormComponent implements OnInit {
   initForm() {
     this.form = this.fb.group({
       date: ['', Validators.required],
-      time: ['19:00', Validators.required],
+      time: ['', Validators.required],
       guests: [2, Validators.required],
       room: ['', Validators.required],
       first_name: ['', Validators.required],
@@ -6399,61 +7565,70 @@ export class ReservationFormComponent implements OnInit {
       email: ['', [Validators.required, Validators.email]],
       comments: [''],
       main_courses: this.fb.array([]),
-      upsell_items: this.fb.group({})
+      upsell_items: this.fb.group({}),
     });
-
-    const upsellGroup = this.form.get('upsell_items') as FormGroup;
-    this.allSushiItems.forEach(item => {
-      upsellGroup.addControl(item.name, this.fb.control(0));
-    });
-
-    // Initial setup for main courses
-    this.onGuestsChange(); 
+    this.onGuestsChange();
   }
 
   get mainCoursesArray() {
     return this.form.get('main_courses') as FormArray;
   }
-
   get upsellForm() {
     return this.form.get('upsell_items') as FormGroup;
   }
 
-  // ✅ Fix: Preserve existing values when changing guest count
   onGuestsChange() {
     const currentCount = this.mainCoursesArray.length;
     const newCount = Number(this.form.get('guests')?.value || 0);
 
     if (newCount > currentCount) {
-        for (let i = currentCount; i < newCount; i++) {
-            this.mainCoursesArray.push(this.fb.control('', Validators.required));
-        }
+      for (let i = currentCount; i < newCount; i++) {
+        this.mainCoursesArray.push(this.fb.control('', Validators.required)); 
+      }
     } else if (newCount < currentCount) {
-        for (let i = currentCount; i > newCount; i--) {
-            this.mainCoursesArray.removeAt(i - 1);
-        }
+      for (let i = currentCount; i > newCount; i--) {
+        this.mainCoursesArray.removeAt(i - 1);
+      }
     }
   }
 
-  async loadConfigAndDates(restaurant: string) {
+  loadRestaurantData(id: string) {
     this.loadingConfig.set(true);
-    try {
-        const configs = await this.configService.getAll().toPromise();
-        const myConfig = configs?.[restaurant];
-        
-        if (myConfig) {
-            this.isRestaurantActive.set(myConfig.isActive);
-            this.generateTimeSlots(myConfig.openingTime, myConfig.closingTime, myConfig.intervalMinutes);
+
+    this.restaurantService.getById(id).subscribe({
+      next: async (data) => {
+        this.restaurant.set(data);
+
+        this.generateTimeSlots(
+          data.config.openingTime,
+          data.config.closingTime,
+          data.config.timeSlotInterval
+        );
+
+        const upsellGroup = this.form.get('upsell_items') as FormGroup;
+        Object.keys(upsellGroup.controls).forEach((key) => upsellGroup.removeControl(key));
+
+        if (data.menuConfig.hasUpsells) {
+          data.menuConfig.upsellItems.forEach((item) => {
+            upsellGroup.addControl(item.id, this.fb.control(0));
+          });
         }
 
-        const caps = await this.capacityService.getAll().toPromise();
+        if (!data.menuConfig.hasMainCourseSelection) {
+          this.mainCoursesArray.controls.forEach((c) => c.clearValidators());
+          this.mainCoursesArray.updateValueAndValidity();
+        }
+
+        const caps = await firstValueFrom(this.capacityService.getAll());
         this.buildDateOptions(caps || {});
-    } catch (e) {
-        console.error(e);
-        this.toast.error('Failed to load restaurant details');
-    } finally {
+
         this.loadingConfig.set(false);
-    }
+      },
+      error: () => {
+        this.toast.error('Restaurant not found');
+        this.router.navigate(['/']);
+      },
+    });
   }
 
   buildDateOptions(capacities: any) {
@@ -6462,67 +7637,65 @@ export class ReservationFormComponent implements OnInit {
     const isTodayBlocked = today.getHours() >= 11;
 
     for (let i = 0; i < 6; i++) {
-        const d = new Date();
-        d.setDate(today.getDate() + i);
-        const iso = d.toISOString().split('T')[0];
-        const key = `${this.restaurantId()}_${iso}`;
-        
-        const capData = capacities[key];
-        const capacity = capData?.capacity || 0;
-        const reserved = capData?.reserved_guests || 0;
-        const available = capacity - reserved;
-        
-        const disabled = (i === 0 && isTodayBlocked) || (!capacity) || (available <= 0);
+      const d = new Date();
+      d.setDate(today.getDate() + i);
+      const iso = d.toISOString().split('T')[0];
+      const key = `${this.restaurantId()}_${iso}`;
 
-        dates.push({
-            iso,
-            label: d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }),
-            disabled
-        });
+      const capData = capacities[key];
+      const capacity = capData?.capacity || 0;
+      const reserved = capData?.reserved_guests || 0;
+      const available = capacity - reserved;
+
+      const disabled = (i === 0 && isTodayBlocked) || !capacity || available <= 0;
+
+      dates.push({
+        iso,
+        label: d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }),
+        disabled,
+      });
     }
     this.availableDates.set(dates);
   }
 
   checkCapacity(date: string) {
-     const rest = this.restaurantId();
-     if (!rest) return;
-     
-     this.reservationService.getAll(rest, date).subscribe(res => {
-         this.capacityService.getAll().subscribe(allCaps => {
-             const key = `${rest}_${date}`;
-             const cap = allCaps[key]?.capacity || 0;
-             const reserved = allCaps[key]?.reserved_guests || 0;
-             this.spotsLeft.set(Math.max(0, cap - reserved));
-         });
-     });
+    const rest = this.restaurantId();
+    if (!rest) return;
+
+    this.reservationService.getAll(rest, date).subscribe((_res) => {
+      this.capacityService.getAll().subscribe((allCaps) => {
+        const key = `${rest}_${date}`;
+        const cap = allCaps[key]?.capacity || 0;
+        const reserved = allCaps[key]?.reserved_guests || 0;
+        this.spotsLeft.set(Math.max(0, cap - reserved));
+      });
+    });
   }
 
   generateTimeSlots(start: string, end: string, interval: number) {
-      const slots = [];
-      const [startH, startM] = start.split(':').map(Number);
-      const [endH, endM] = end.split(':').map(Number);
-      let current = new Date(); current.setHours(startH, startM, 0, 0);
-      const endTime = new Date(); endTime.setHours(endH, endM, 0, 0);
-      
-      while (current <= endTime) {
-          slots.push(current.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
-          current.setMinutes(current.getMinutes() + interval);
-      }
-      this.availableTimeSlots.set(slots);
+    const slots = [];
+    const [startH, startM] = start.split(':').map(Number);
+    const [endH, endM] = end.split(':').map(Number);
+    let current = new Date();
+    current.setHours(startH, startM, 0, 0);
+    const endTime = new Date();
+    endTime.setHours(endH, endM, 0, 0);
+
+    while (current <= endTime) {
+      slots.push(current.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
+      current.setMinutes(current.getMinutes() + interval);
+    }
+    this.availableTimeSlots.set(slots);
   }
 
-  incrementSushi(name: string) {
-    const ctrl = this.upsellForm.get(name);
-    if (ctrl) {
-      ctrl.setValue(ctrl.value + 1);
-    }
+  incrementSushi(id: string) {
+    const ctrl = this.upsellForm.get(id);
+    if (ctrl) ctrl.setValue(ctrl.value + 1);
   }
-  
-  decrementSushi(name: string) {
-    const ctrl = this.upsellForm.get(name);
-    if (ctrl && ctrl.value > 0) {
-      ctrl.setValue(ctrl.value - 1);
-    }
+
+  decrementSushi(id: string) {
+    const ctrl = this.upsellForm.get(id);
+    if (ctrl && ctrl.value > 0) ctrl.setValue(ctrl.value - 1);
   }
 
   hasSelectedSushi() {
@@ -6531,25 +7704,29 @@ export class ReservationFormComponent implements OnInit {
   }
 
   calculateSushiTotal() {
-     let total = 0;
-     const vals = this.upsellForm.value;
-     this.allSushiItems.forEach(item => {
-        total += (vals[item.name] || 0) * item.price;
-     });
-     return total;
+    let total = 0;
+    const vals = this.upsellForm.value;
+    const items = this.restaurant()?.menuConfig.upsellItems || [];
+
+    items.forEach((item) => {
+      total += (vals[item.id] || 0) * item.price;
+    });
+    return total;
   }
 
-  closeSushiModal() { this.showSushiModal.set(false); }
+  closeSushiModal() {
+    this.showSushiModal.set(false);
+  }
 
   onSubmit() {
     if (this.form.invalid) {
-        this.toast.warning('Please fill in all required fields');
-        return;
+      this.toast.warning('Please fill in all required fields');
+      return;
     }
-    if (this.restaurantId() === 'Chinese') {
-        this.showSushiModal.set(true);
+    if (this.restaurant()?.menuConfig.hasUpsells) {
+      this.showSushiModal.set(true);
     } else {
-        this.finalizeReservation();
+      this.finalizeReservation();
     }
   }
 
@@ -6567,30 +7744,41 @@ export class ReservationFormComponent implements OnInit {
   finalizeReservation() {
     this.submitting.set(true);
     const formData = this.form.value;
-    
+
+    const upsellPayload: any = {};
+    const items = this.restaurant()?.menuConfig.upsellItems || [];
+
+    Object.keys(formData.upsell_items).forEach((key) => {
+      const count = formData.upsell_items[key];
+      if (count > 0) {
+        const item = items.find((i) => i.id === key);
+        if (item) upsellPayload[item.label] = count; 
+      }
+    });
+
     const payload: any = {
-        ...formData,
-        restaurant: this.restaurantId(),
-        upsell_total_price: this.calculateSushiTotal(),
-        upsell_items: Object.fromEntries(
-            Object.entries(formData.upsell_items).filter(([_, v]: any) => v > 0)
-        )
+      ...formData,
+      restaurant: this.restaurantId(),
+      upsell_total_price: this.calculateSushiTotal(),
+      upsell_items: upsellPayload,
     };
 
     this.reservationService.create(payload).subscribe({
-        next: () => {
-            this.toast.success('Reservation Confirmed! 🎉');
-            this.router.navigate(['/confirmation']);
-        },
-        error: (err) => {
-            console.error(err);
-            this.toast.error(err.error?.detail || 'Booking failed');
-            this.submitting.set(false);
-        }
+      next: () => {
+        this.toast.success('Reservation Confirmed! 🎉');
+        this.router.navigate(['/confirmation']);
+      },
+      error: (err) => {
+        console.error(err);
+        this.toast.error(err.error?.detail || 'Booking failed');
+        this.submitting.set(false);
+      },
     });
   }
 
-  menuUrl = () => `/menus/${this.restaurantId()}.pdf`;
+  menuUrl() {
+    return this.sanitizer.bypassSecurityTrustResourceUrl(this.restaurant()?.media.menuPdfUrl || '');
+  }
 }
 
 
@@ -6987,7 +8175,8 @@ import { AuthService } from '../../../core/services/auth.service';
             <a routerLink="/admin/dashboard" routerLinkActive="bg-white text-[#0f172a]" [routerLinkActiveOptions]="{ exact: true }" [class]="linkBase">Dashboard</a>
             <a routerLink="/admin/manage-capacities" routerLinkActive="bg-white text-[#0f172a]" [class]="linkBase">Manage Capacities</a>
             <a routerLink="/admin/capacity-overview" routerLinkActive="bg-white text-[#0f172a]" [class]="linkBase">Capacity Overview</a>
-            <a routerLink="/admin/reviews" routerLinkActive="bg-white text-[#0f172a]" [class]="linkBase">Reviews</a>
+<a routerLink="/admin/reviews" routerLinkActive="bg-white text-[#0f172a]" [class]="linkBase">Reviews</a>
+<a routerLink="/admin/restaurants" routerLinkActive="bg-white text-[#0f172a]" [class]="linkBase">Menus</a>
             <a routerLink="/admin/settings" routerLinkActive="bg-white text-[#0f172a]" [class]="linkBase">Settings</a>
             <a routerLink="/admin/analytics" routerLinkActive="bg-white text-[#0f172a]" [class]="linkBase">Analytics</a>
             <button (click)="handleLogout()" class="ml-2 px-3 py-2 rounded-md text-sm font-medium bg-red-500/90 hover:bg-red-500">Logout</button>
@@ -7164,69 +8353,106 @@ export class Footer {}
 // =================================================================================
 
 
-import { Component, signal, OnInit, HostListener, ChangeDetectionStrategy } from '@angular/core';
+// =================================================================================
+// File: hotel-reservation/src/app/shared/components/header/header.ts
+// =================================================================================
+
+import { Component, signal, OnInit, HostListener, ChangeDetectionStrategy, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router, NavigationEnd } from '@angular/router';
-import { TranslateModule, TranslateService } from '@ngx-translate/core';
 import { filter } from 'rxjs/operators';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { AuthService } from '../../../core/services/auth.service';
 
 @Component({
   selector: 'app-header',
   standalone: true,
-  imports: [CommonModule, TranslateModule],
+  imports: [CommonModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <header
       [class]="headerClasses()"
       class="fixed inset-x-0 top-0 z-50 transition-all duration-300"
     >
-      <div class="relative w-full max-w-6xl mx-auto flex items-center justify-between">
-        <div class="hidden md:flex items-center">
-          <span [class]="titleClasses()" class="tracking-wide cursor-pointer" (click)="navigate('/')">
-            {{ 'hotelName' | translate }}
-          </span>
+      <div class="relative w-full max-w-7xl mx-auto flex items-center justify-between px-4 sm:px-6">
+        
+        <!-- Logo / Brand -->
+        <div class="flex items-center gap-2 cursor-pointer z-10" (click)="navigate('/')">
+             <img [src]="logoSrc()" alt="Seagull" class="h-10 w-auto transition-all" />
+             <span [class]="titleClasses()" class="font-bold tracking-tight hidden sm:block">
+               Seagull Beach Resort
+             </span>
         </div>
-        <div [class]="logoContainerClasses()" class="absolute inset-x-0 flex justify-center pointer-events-none">
-          <img [src]="logoSrc()" alt="Hotel Logo" [class]="logoClasses()" class="w-auto transform pointer-events-auto cursor-pointer drop-shadow-md" (click)="navigate('/')" />
-        </div>
-        <div [class]="navContainerClasses()" class="hidden md:flex items-center">
-          <nav [class]="navClasses()" class="flex items-center">
-            <span [class]="linkClasses()" (click)="navigate('/')">{{ 'home' | translate }}</span>
-            <span [class]="linkClasses()" (click)="navigate('/about')">{{ 'about' | translate }}</span>
-            <span [class]="linkClasses()" (click)="navigate('/contact')">{{ 'contact' | translate }}</span>
+
+        <!-- Desktop Nav & Actions -->
+        <div class="hidden md:flex items-center gap-6">
+          <nav class="flex items-center gap-6">
+            <span [class]="linkClasses()" (click)="navigate('/')">Home</span>
+            <span [class]="linkClasses()" (click)="navigate('/about')">About</span>
+            <span [class]="linkClasses()" (click)="navigate('/contact')">Contact</span>
           </nav>
-          <select [value]="currentLanguage()" (change)="changeLanguage($event)" [class]="selectClasses()" class="min-w-[92px]">
-            <option value="en">🇺🇸 English</option>
-            <option value="de">🇩🇪 Deutsch</option>
-            <option value="ru">🇷🇺 Русский</option>
-            <option value="fr">🇫🇷 Français</option>
-            <option value="cs">🇨🇿 Čeština</option>
-            <option value="sr">🇷🇸 Srpski</option>
-            <option value="pl">🇵🇱 Polski</option>
-          </select>
+
+          <div class="h-6 w-px bg-current opacity-20"></div>
+
+          <!-- Auth Button -->
+          @if (authService.user()) {
+             <button 
+              (click)="navigateToDashboard()"
+              class="px-5 py-2 rounded-full font-semibold text-sm transition shadow-lg bg-orange-600 text-white hover:bg-orange-700 border-none"
+             >
+               Dashboard
+             </button>
+          } @else {
+            <button 
+              (click)="navigate('/login')"
+              class="px-5 py-2 rounded-full font-semibold text-sm transition shadow-sm border"
+              [class]="loginBtnClasses()"
+             >
+               Login
+             </button>
+          }
         </div>
-        <div [class]="mobileIconClasses()" class="flex md:hidden ml-auto">
-          <button (click)="toggleMobileMenu()" class="focus:outline-none">
-            @if (isOpen()) {
-            <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-            } @else {
-            <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
-            }
+
+        <!-- Mobile Menu Button -->
+        <div class="flex md:hidden ml-auto">
+          <button (click)="toggleMobileMenu()" class="focus:outline-none p-2">
+             <span [class]="mobileIconClasses()">
+               @if (isOpen()) {
+                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+               } @else {
+                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+               }
+             </span>
           </button>
         </div>
       </div>
+
+      <!-- Mobile Menu Dropdown -->
+      @if (isOpen()) {
+        <div class="md:hidden absolute top-full left-0 w-full bg-white shadow-xl border-t border-gray-100 py-4 px-6 flex flex-col gap-4 animate-fade-in">
+          <span class="text-gray-800 font-medium py-2 border-b border-gray-50" (click)="navigate('/')">Home</span>
+          <span class="text-gray-800 font-medium py-2 border-b border-gray-50" (click)="navigate('/about')">About</span>
+          <span class="text-gray-800 font-medium py-2 border-b border-gray-50" (click)="navigate('/contact')">Contact</span>
+          
+          @if (authService.user()) {
+            <button (click)="navigateToDashboard()" class="w-full bg-orange-600 text-white py-3 rounded-xl font-bold mt-2">Go to Dashboard</button>
+          } @else {
+            <button (click)="navigate('/login')" class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold mt-2">Login</button>
+          }
+        </div>
+      }
     </header>
   `,
-  styles: [],
+  styles: []
 })
 export class Header implements OnInit {
+  public authService = inject(AuthService);
+  
   isOpen = signal(false);
   isScrolled = signal(false);
   isHome = signal(true);
-  currentLanguage = signal('en');
 
-  constructor(private router: Router, private translate: TranslateService) {
+  constructor(private router: Router) {
     this.router.events
       .pipe(
         filter((event) => event instanceof NavigationEnd),
@@ -7236,8 +8462,6 @@ export class Header implements OnInit {
         this.isOpen.set(false);
         this.updateIsHome();
       });
-
-    this.currentLanguage.set(this.translate.currentLang || 'en');
   }
 
   ngOnInit() {
@@ -7255,7 +8479,7 @@ export class Header implements OnInit {
       this.isScrolled.set(true);
       return;
     }
-    this.isScrolled.set(window.scrollY > 0);
+    this.isScrolled.set(window.scrollY > 20);
   }
 
   private updateIsHome() {
@@ -7263,25 +8487,26 @@ export class Header implements OnInit {
   }
 
   effectiveScrolled = () => !this.isHome() || this.isScrolled();
-  compact = () => !this.effectiveScrolled();
-  logoSrc = () => (this.effectiveScrolled() ? 'assets/images/seagullwhite.png' : 'assets/images/logo.png');
-
-  headerClasses = () => `${this.effectiveScrolled() ? 'bg-[#253645]/95 text-white shadow-lg backdrop-blur' : 'bg-transparent text-slate-900'} ${this.compact() ? 'px-2 sm:px-3 py-1 translate-y-10 sm:translate-y-12 md:translate-y-14' : 'px-6 py-5 translate-y-0'}`;
-  titleClasses = () => `${this.compact() ? 'text-lg' : 'text-base sm:text-lg'} ${this.effectiveScrolled() ? 'text-white/95 hover:opacity-90' : 'text-slate-900 hover:opacity-80'}`;
-  logoContainerClasses = () => (this.compact() ? 'translate-y-2 sm:translate-y-3' : '');
-  logoClasses = () => this.compact() ? 'h-14 sm:h-16 -translate-y-1 sm:-translate-y-2' : 'h-12 sm:h-14';
-  navContainerClasses = () => (this.compact() ? 'gap-3' : 'gap-8');
-  navClasses = () => `${this.compact() ? 'gap-3' : 'gap-5'} ${this.compact() ? 'text-base' : 'text-sm'}`;
-  linkClasses = () => `cursor-pointer transition font-medium ${this.effectiveScrolled() ? 'text-white/95 hover:text-white' : 'text-slate-900 hover:text-slate-700'}`;
-  selectClasses = () => `${this.effectiveScrolled() ? 'bg-white/15 text-white border border-white/30 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40 rounded text-sm backdrop-blur transition' : 'bg-white/90 text-slate-900 border border-slate-300 hover:bg-white focus:outline-none focus:ring-2 focus:ring-slate-300 rounded text-sm transition'} ${this.compact() ? 'px-2 py-0.5' : 'px-2 py-1'}`;
-  mobileIconClasses = () => `${this.effectiveScrolled() ? 'text-white' : 'text-slate-900'} ${this.compact() ? 'translate-y-1' : ''}`;
   
+  logoSrc = () => (this.effectiveScrolled() ? 'assets/images/seagullwhite.png' : 'assets/images/logo.png');
+  headerClasses = () => `${this.effectiveScrolled() ? 'bg-[#1e293b]/95 text-white shadow-md backdrop-blur-md py-3' : 'bg-transparent text-slate-800 py-6'}`;
+  titleClasses = () => `${this.effectiveScrolled() ? 'text-white' : 'text-slate-800'} text-lg`;
+  linkClasses = () => `cursor-pointer font-medium transition-colors hover:opacity-70 ${this.effectiveScrolled() ? 'text-gray-100' : 'text-slate-700'}`;
+  loginBtnClasses = () => `${this.effectiveScrolled() ? 'bg-white text-slate-900 hover:bg-gray-100 border-transparent' : 'bg-blue-600 text-white border-transparent hover:bg-blue-700'}`;
+  mobileIconClasses = () => `${this.effectiveScrolled() ? 'text-white' : 'text-slate-900'}`;
+
   navigate(path: string) { this.router.navigate([path]); }
   toggleMobileMenu() { this.isOpen.update((v) => !v); }
-  changeLanguage(event: Event) {
-    const lang = (event.target as HTMLSelectElement).value;
-    this.translate.use(lang);
-    this.currentLanguage.set(lang);
+  
+  navigateToDashboard() {
+    const role = this.authService.user()?.role;
+    const routes: Record<string, string> = {
+      admin: '/admin/dashboard',
+      reception: '/reception/dashboard',
+      kitchen: '/kitchen/dashboard',
+      accounting: '/accounting/dashboard'
+    };
+    this.navigate(routes[role || ''] || '/');
   }
 }
 
@@ -7332,7 +8557,7 @@ export class LoadingSpinner {}
 // File: hotel-reservation/src/app/shared/components/reservations-table/reservations-table.component.ts
 // =================================================================================
 
-import { Component, Input, OnInit, signal, ChangeDetectionStrategy } from '@angular/core';
+import { Component, Input, OnInit, signal, ChangeDetectionStrategy, inject, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ReservationService } from '../../../core/services/reservation.service';
@@ -7346,9 +8571,8 @@ import autoTable from 'jspdf-autotable';
   selector: 'app-reservations-table',
   standalone: true,
   imports: [CommonModule, FormsModule, LoadingSpinner],
-  changeDetection: ChangeDetectionStrategy.OnPush, // ✅ Performance Boost
+  changeDetection: ChangeDetectionStrategy.OnPush, 
   template: `
-    <!-- Template remains largely the same -->
     <div class="space-y-4">
       <div class="bg-white shadow-md rounded-lg p-4">
         <div class="grid grid-cols-1 md:grid-cols-6 gap-3">
@@ -7438,6 +8662,9 @@ export class ReservationsTableComponent implements OnInit {
   search = '';
   restaurantFilter = 'all';
   dateFilter = '';
+  
+  // Inject ChangeDetectorRef to force UI updates when data arrives
+  private cdr = inject(ChangeDetectorRef);
 
   constructor(private reservationService: ReservationService, private toast: ToastrService) {}
 
@@ -7447,23 +8674,34 @@ export class ReservationsTableComponent implements OnInit {
   }
 
   loadData() {
+    console.log('Loading data with filters:', { restaurant: this.restaurantFilter, date: this.dateFilter });
     this.loading.set(true);
     this.reservationService.getAll(
         this.restaurantFilter !== 'all' ? this.restaurantFilter : undefined,
         this.dateFilter ? this.dateFilter : undefined
     ).subscribe({
       next: (res: ReservationResponse) => {
-        // ✅ Fix: Correctly handle backend PaginatedReservations structure
+        // Backend returns "items" in PaginatedReservations object
         const data = res.items || [];
+        console.log('Reservations data fetched:', data);
+        
         this.reservations.set(data);
+        
         this.applyFilters();
+        
         this.loading.set(false);
+        this.cdr.markForCheck(); // Explicitly update UI
       },
-      error: () => this.loading.set(false)
+      error: (err) => {
+        console.error('Error loading reservations:', err);
+        this.loading.set(false);
+        this.cdr.markForCheck(); // Explicitly update UI even on error
+      }
     });
   }
 
   applyFilters() {
+    console.log('Applying filters with search term:', this.search);
     let data = this.reservations();
     if (this.search) {
       const term = this.search.toLowerCase();
@@ -7474,6 +8712,7 @@ export class ReservationsTableComponent implements OnInit {
       );
     }
     this.filteredReservations.set(data);
+    console.log('Filtered reservations:', this.filteredReservations());
   }
 
   getUpsellKeys(obj: any): string[] {
@@ -7482,9 +8721,17 @@ export class ReservationsTableComponent implements OnInit {
 
   cancelReservation(id: string) {
     if(!confirm('Cancel this reservation?')) return;
-    this.reservationService.cancel(id).subscribe(() => {
-      this.toast.success('Cancelled');
-      this.loadData();
+    console.log('Cancelling reservation with ID:', id);
+    this.loading.set(true);
+    this.reservationService.cancel(id).subscribe({
+      next: () => {
+        this.toast.success('Cancelled');
+        this.loadData();
+      },
+      error: () => {
+        this.toast.error('Failed to cancel');
+        this.loading.set(false);
+      }
     });
   }
 

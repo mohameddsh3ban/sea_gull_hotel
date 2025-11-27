@@ -1,7 +1,7 @@
 import { Injectable, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { tap } from 'rxjs/operators';
+import { finalize } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 import { RestaurantConfig } from '../models/reservation.model';
 
@@ -23,7 +23,7 @@ export class ConfigService {
     this.loadingSignal.set(true);
     return this.http
       .get<{ [restaurant: string]: RestaurantConfig }>(this.apiUrl)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   /**
@@ -33,6 +33,6 @@ export class ConfigService {
     this.loadingSignal.set(true);
     return this.http
       .put<RestaurantConfig>(`${this.apiUrl}/${restaurant}`, config)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 }

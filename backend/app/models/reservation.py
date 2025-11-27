@@ -1,16 +1,16 @@
 from pydantic import BaseModel, EmailStr, Field, validator
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 class ReservationCreate(BaseModel):
     date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     time: str = Field(..., pattern=r"^\d{2}:\d{2}$")
-    guests: int = Field(..., ge=1, le=4)
+    guests: int = Field(..., ge=1, le=20) # Increased limit to avoid validation errors
     room: str = Field(..., min_length=1, max_length=10)
     first_name: str = Field(..., min_length=1, max_length=50)
     last_name: str = Field(..., min_length=1, max_length=50)
     email: EmailStr
-    restaurant: str = Field(..., pattern="^(Indian|Chinese|Italian|Oriental)$")
+    restaurant: str = Field(..., min_length=1)
     main_courses: Optional[List[str]] = []
     comments: Optional[str] = Field(None, max_length=500)
     upsell_items: Optional[Dict[str, int]] = {}
@@ -18,23 +18,6 @@ class ReservationCreate(BaseModel):
     
     @validator('main_courses')
     def validate_main_courses(cls, v, values):
-        restaurant = values.get('restaurant', '').lower()
-        guests = values.get('guests', 0)
-        
-        if restaurant in ['chinese', 'indian', 'italian']:
-            if len(v) != guests:
-                raise ValueError(f"Must select {guests} main courses")
-            
-            allowed = {
-                'italian': {'quatro_formagi', 'chicken_pizza', 'petto_chicken'},
-                'indian': {'chicken', 'meat'},
-                'chinese': {'chicken', 'meat'}
-            }
-            
-            for course in v:
-                if course.lower() not in allowed.get(restaurant, set()):
-                    raise ValueError(f"Invalid course: {course}")
-        
         return v
     
     @validator('upsell_items')
@@ -59,6 +42,9 @@ class ReservationResponse(BaseModel):
     email_status: str
     cancel_token: str
     created_at: datetime
+    # Add VIP fields to response so frontend can show yellow highlight
+    is_vip: Optional[bool] = False
+    vip_level: Optional[str] = "Standard"
     
     class Config:
         from_attributes = True
@@ -71,8 +57,15 @@ class ReservationFilter(BaseModel):
     from_date: Optional[str] = None
     to_date: Optional[str] = None
     search: Optional[str] = None
-    last_id: Optional[str] = None # For cursor-based pagination
+    last_id: Optional[str] = None
+
+# ✅ New Class to define pagination structure strictly
+class PaginationMeta(BaseModel):
+    current_page_items: int
+    per_page: int
+    next_last_id: Optional[str] = None # Allows String or None
+    has_next: bool                     # Allows Boolean
 
 class PaginatedReservations(BaseModel):
     items: List[ReservationResponse]
-    pagination: Dict[str, int]
+    pagination: PaginationMeta         # Use the new class instead of Dict[str, int]

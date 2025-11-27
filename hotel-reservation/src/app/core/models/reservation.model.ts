@@ -39,6 +39,7 @@ export interface ReservationResponse {
 }
 
 export interface RestaurantConfig {
+  restaurantId: string;
   isActive: boolean;
   openingTime: string;
   closingTime: string;

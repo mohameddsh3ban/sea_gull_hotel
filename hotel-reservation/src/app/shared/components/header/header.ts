@@ -1,66 +1,103 @@
-import { Component, signal, OnInit, HostListener, ChangeDetectionStrategy } from '@angular/core';
+// =================================================================================
+// File: hotel-reservation/src/app/shared/components/header/header.ts
+// =================================================================================
+
+import { Component, signal, OnInit, HostListener, ChangeDetectionStrategy, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router, NavigationEnd } from '@angular/router';
-import { TranslateModule, TranslateService } from '@ngx-translate/core';
 import { filter } from 'rxjs/operators';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { AuthService } from '../../../core/services/auth.service';
 
 @Component({
   selector: 'app-header',
   standalone: true,
-  imports: [CommonModule, TranslateModule],
+  imports: [CommonModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <header
       [class]="headerClasses()"
       class="fixed inset-x-0 top-0 z-50 transition-all duration-300"
     >
-      <div class="relative w-full max-w-6xl mx-auto flex items-center justify-between">
-        <div class="hidden md:flex items-center">
-          <span [class]="titleClasses()" class="tracking-wide cursor-pointer" (click)="navigate('/')">
-            {{ 'hotelName' | translate }}
-          </span>
+      <div class="relative w-full max-w-7xl mx-auto flex items-center justify-between px-4 sm:px-6">
+        
+        <!-- Logo / Brand -->
+        <div class="flex items-center gap-2 cursor-pointer z-10" (click)="navigate('/')">
+             <img [src]="logoSrc()" alt="Seagull" class="h-10 w-auto transition-all" />
+             <span [class]="titleClasses()" class="font-bold tracking-tight hidden sm:block">
+               Seagull Beach Resort
+             </span>
         </div>
-        <div [class]="logoContainerClasses()" class="absolute inset-x-0 flex justify-center pointer-events-none">
-          <img [src]="logoSrc()" alt="Hotel Logo" [class]="logoClasses()" class="w-auto transform pointer-events-auto cursor-pointer drop-shadow-md" (click)="navigate('/')" />
-        </div>
-        <div [class]="navContainerClasses()" class="hidden md:flex items-center">
-          <nav [class]="navClasses()" class="flex items-center">
-            <span [class]="linkClasses()" (click)="navigate('/')">{{ 'home' | translate }}</span>
-            <span [class]="linkClasses()" (click)="navigate('/about')">{{ 'about' | translate }}</span>
-            <span [class]="linkClasses()" (click)="navigate('/contact')">{{ 'contact' | translate }}</span>
+
+        <!-- Desktop Nav & Actions -->
+        <div class="hidden md:flex items-center gap-6">
+          <nav class="flex items-center gap-6">
+            <span [class]="linkClasses()" (click)="navigate('/')">Home</span>
+            <span [class]="linkClasses()" (click)="navigate('/about')">About</span>
+            <span [class]="linkClasses()" (click)="navigate('/contact')">Contact</span>
           </nav>
-          <select [value]="currentLanguage()" (change)="changeLanguage($event)" [class]="selectClasses()" class="min-w-[92px]">
-            <option value="en">🇺🇸 English</option>
-            <option value="de">🇩🇪 Deutsch</option>
-            <option value="ru">🇷🇺 Русский</option>
-            <option value="fr">🇫🇷 Français</option>
-            <option value="cs">🇨🇿 Čeština</option>
-            <option value="sr">🇷🇸 Srpski</option>
-            <option value="pl">🇵🇱 Polski</option>
-          </select>
+
+          <div class="h-6 w-px bg-current opacity-20"></div>
+
+          <!-- Auth Button -->
+          @if (authService.user()) {
+             <button 
+              (click)="navigateToDashboard()"
+              class="px-5 py-2 rounded-full font-semibold text-sm transition shadow-lg bg-orange-600 text-white hover:bg-orange-700 border-none"
+             >
+               Dashboard
+             </button>
+          } @else {
+            <button 
+              (click)="navigate('/login')"
+              class="px-5 py-2 rounded-full font-semibold text-sm transition shadow-sm border"
+              [class]="loginBtnClasses()"
+             >
+               Login
+             </button>
+          }
         </div>
-        <div [class]="mobileIconClasses()" class="flex md:hidden ml-auto">
-          <button (click)="toggleMobileMenu()" class="focus:outline-none">
-            @if (isOpen()) {
-            <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-            } @else {
-            <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
-            }
+
+        <!-- Mobile Menu Button -->
+        <div class="flex md:hidden ml-auto">
+          <button (click)="toggleMobileMenu()" class="focus:outline-none p-2">
+             <span [class]="mobileIconClasses()">
+               @if (isOpen()) {
+                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+               } @else {
+                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+               }
+             </span>
           </button>
         </div>
       </div>
+
+      <!-- Mobile Menu Dropdown -->
+      @if (isOpen()) {
+        <div class="md:hidden absolute top-full left-0 w-full bg-white shadow-xl border-t border-gray-100 py-4 px-6 flex flex-col gap-4 animate-fade-in">
+          <span class="text-gray-800 font-medium py-2 border-b border-gray-50" (click)="navigate('/')">Home</span>
+          <span class="text-gray-800 font-medium py-2 border-b border-gray-50" (click)="navigate('/about')">About</span>
+          <span class="text-gray-800 font-medium py-2 border-b border-gray-50" (click)="navigate('/contact')">Contact</span>
+          
+          @if (authService.user()) {
+            <button (click)="navigateToDashboard()" class="w-full bg-orange-600 text-white py-3 rounded-xl font-bold mt-2">Go to Dashboard</button>
+          } @else {
+            <button (click)="navigate('/login')" class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold mt-2">Login</button>
+          }
+        </div>
+      }
     </header>
   `,
-  styles: [],
+  styles: []
 })
 export class Header implements OnInit {
+  public authService = inject(AuthService);
+  
   isOpen = signal(false);
   isScrolled = signal(false);
   isHome = signal(true);
-  currentLanguage = signal('en');
 
-  constructor(private router: Router, private translate: TranslateService) {
+  constructor(private router: Router) {
     this.router.events
       .pipe(
         filter((event) => event instanceof NavigationEnd),
@@ -70,8 +107,6 @@ export class Header implements OnInit {
         this.isOpen.set(false);
         this.updateIsHome();
       });
-
-    this.currentLanguage.set(this.translate.currentLang || 'en');
   }
 
   ngOnInit() {
@@ -89,7 +124,7 @@ export class Header implements OnInit {
       this.isScrolled.set(true);
       return;
     }
-    this.isScrolled.set(window.scrollY > 0);
+    this.isScrolled.set(window.scrollY > 20);
   }
 
   private updateIsHome() {
@@ -97,24 +132,25 @@ export class Header implements OnInit {
   }
 
   effectiveScrolled = () => !this.isHome() || this.isScrolled();
-  compact = () => !this.effectiveScrolled();
-  logoSrc = () => (this.effectiveScrolled() ? 'assets/images/seagullwhite.png' : 'assets/images/logo.png');
-
-  headerClasses = () => `${this.effectiveScrolled() ? 'bg-[#253645]/95 text-white shadow-lg backdrop-blur' : 'bg-transparent text-slate-900'} ${this.compact() ? 'px-2 sm:px-3 py-1 translate-y-10 sm:translate-y-12 md:translate-y-14' : 'px-6 py-5 translate-y-0'}`;
-  titleClasses = () => `${this.compact() ? 'text-lg' : 'text-base sm:text-lg'} ${this.effectiveScrolled() ? 'text-white/95 hover:opacity-90' : 'text-slate-900 hover:opacity-80'}`;
-  logoContainerClasses = () => (this.compact() ? 'translate-y-2 sm:translate-y-3' : '');
-  logoClasses = () => this.compact() ? 'h-14 sm:h-16 -translate-y-1 sm:-translate-y-2' : 'h-12 sm:h-14';
-  navContainerClasses = () => (this.compact() ? 'gap-3' : 'gap-8');
-  navClasses = () => `${this.compact() ? 'gap-3' : 'gap-5'} ${this.compact() ? 'text-base' : 'text-sm'}`;
-  linkClasses = () => `cursor-pointer transition font-medium ${this.effectiveScrolled() ? 'text-white/95 hover:text-white' : 'text-slate-900 hover:text-slate-700'}`;
-  selectClasses = () => `${this.effectiveScrolled() ? 'bg-white/15 text-white border border-white/30 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40 rounded text-sm backdrop-blur transition' : 'bg-white/90 text-slate-900 border border-slate-300 hover:bg-white focus:outline-none focus:ring-2 focus:ring-slate-300 rounded text-sm transition'} ${this.compact() ? 'px-2 py-0.5' : 'px-2 py-1'}`;
-  mobileIconClasses = () => `${this.effectiveScrolled() ? 'text-white' : 'text-slate-900'} ${this.compact() ? 'translate-y-1' : ''}`;
   
+  logoSrc = () => (this.effectiveScrolled() ? 'assets/images/seagullwhite.png' : 'assets/images/logo.png');
+  headerClasses = () => `${this.effectiveScrolled() ? 'bg-[#1e293b]/95 text-white shadow-md backdrop-blur-md py-3' : 'bg-transparent text-slate-800 py-6'}`;
+  titleClasses = () => `${this.effectiveScrolled() ? 'text-white' : 'text-slate-800'} text-lg`;
+  linkClasses = () => `cursor-pointer font-medium transition-colors hover:opacity-70 ${this.effectiveScrolled() ? 'text-gray-100' : 'text-slate-700'}`;
+  loginBtnClasses = () => `${this.effectiveScrolled() ? 'bg-white text-slate-900 hover:bg-gray-100 border-transparent' : 'bg-blue-600 text-white border-transparent hover:bg-blue-700'}`;
+  mobileIconClasses = () => `${this.effectiveScrolled() ? 'text-white' : 'text-slate-900'}`;
+
   navigate(path: string) { this.router.navigate([path]); }
   toggleMobileMenu() { this.isOpen.update((v) => !v); }
-  changeLanguage(event: Event) {
-    const lang = (event.target as HTMLSelectElement).value;
-    this.translate.use(lang);
-    this.currentLanguage.set(lang);
+  
+  navigateToDashboard() {
+    const role = this.authService.user()?.role;
+    const routes: Record<string, string> = {
+      admin: '/admin/dashboard',
+      reception: '/reception/dashboard',
+      kitchen: '/kitchen/dashboard',
+      accounting: '/accounting/dashboard'
+    };
+    this.navigate(routes[role || ''] || '/');
   }
 }

@@ -2,7 +2,7 @@
 // File: hotel-reservation/src/app/features/auth/login/login.component.ts
 // =================================================================================
 
-import { Component, signal, ChangeDetectionStrategy } from '@angular/core';
+import { Component, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -13,8 +13,9 @@ import { ToastrService } from 'ngx-toastr';
   selector: 'app-login',
   standalone: true,
   imports: [CommonModule, ReactiveFormsModule],
-  changeDetection: ChangeDetectionStrategy.OnPush, // ✅ Performance Boost
   template: `
+    <!-- ... (Keep your existing template HTML) ... -->
+    <!-- Just ensure the button uses [disabled]="form.invalid || isLoading()" -->
     <div
       class="flex min-h-full flex-col justify-center px-6 py-12 lg:px-8 bg-gray-50 dark:bg-gray-900"
     >
@@ -121,7 +122,6 @@ import { ToastrService } from 'ngx-toastr';
 })
 export class LoginComponent {
   form;
-
   showPassword = signal(false);
   isLoading = signal(false);
 
@@ -147,29 +147,30 @@ export class LoginComponent {
     this.isLoading.set(true);
     const { email, password } = this.form.value;
 
-    // ✅ FIX: Pass as object
     this.auth.login({ email: email!, password: password! }).subscribe({
-      next: () => {
-        // We don't get { role } directly from login anymore, 
-        // we get it from the authService.user signal
-        const user = this.auth.user(); 
-        const role = user?.role || 'student'; // Default fallback
-        this.redirectBasedOnRole(role);
+      next: (user) => {
+        // ✅ No race condition. We have the user and role here.
+        this.redirectBasedOnRole(user.role);
       },
       error: (err) => {
-        this.toast.error(err.message || 'Login failed');
+        this.toast.error(err.message);
         this.isLoading.set(false);
       },
+      // Note: We don't set isLoading(false) in next() because we are navigating away.
     });
   }
 
   private redirectBasedOnRole(role: string) {
+    // Define dashboard paths
     const routes: Record<string, string> = {
       admin: '/admin/dashboard',
       reception: '/reception/dashboard',
       kitchen: '/kitchen/dashboard',
       accounting: '/accounting/dashboard',
+      guest: '/' // Fallback for pure guests
     };
-    this.router.navigate([routes[role] || '/admin/dashboard']);
+
+    const path = routes[role] || '/';
+    this.router.navigate([path]);
   }
 }

@@ -1,11 +1,15 @@
+// =================================================================================
+// File: hotel-reservation/src/app/features/guest/confirmation/confirmation.component.ts
+// =================================================================================
+
 import { Component } from '@angular/core';
 import { Router } from '@angular/router';
-import { TranslateModule } from '@ngx-translate/core';
+import { CommonModule } from '@angular/common';
 
 @Component({
   selector: 'app-confirmation',
   standalone: true,
-  imports: [TranslateModule],
+  imports: [CommonModule],
   template: `
     <div class="min-h-screen bg-slate-50 flex justify-center pt-20 md:pt-28">
       <div class="w-full max-w-lg md:max-w-4xl px-4 py-6">
@@ -17,22 +21,22 @@ import { TranslateModule } from '@ngx-translate/core';
             </div>
           </div>
           <h2 class="text-2xl font-bold text-green-600 md:text-3xl">
-            {{ 'confirmation.title' | translate }}
+            Reservation Confirmed!
           </h2>
           <p class="text-slate-700 mt-2 md:text-lg">
-            {{ 'confirmation.message' | translate }}
+            We have sent the details to your email.
           </p>
           <button
             (click)="router.navigate(['/'])"
             class="mt-6 bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition"
           >
-            {{ 'confirmation.backHome' | translate }}
+            Return to Home
           </button>
         </div>
 
         <!-- Recommendation -->
         <h3 class="mt-8 text-xl font-semibold text-slate-900">
-          {{ 'recommendations.heading' | translate }}
+          While you are here...
         </h3>
 
         <article class="mt-4 bg-white rounded-2xl shadow overflow-hidden flex flex-col md:flex-row">
@@ -43,13 +47,13 @@ import { TranslateModule } from '@ngx-translate/core';
           />
           <div class="p-4 md:p-6 flex flex-col justify-center md:w-1/2 text-center md:text-left">
             <h4 class="text-2xl font-bold text-slate-900">
-              {{ 'cabanas.title' | translate }}
+              Private Beach Cabanas
             </h4>
             <p class="mt-1 text-slate-700">
-              {{ 'cabanas.description' | translate }}
+              Relax in luxury with our exclusive beach cabanas.
             </p>
             <p class="mt-4 text-sm text-slate-600 italic">
-              {{ 'cabanas.notice' | translate }}
+              Ask reception for availability.
             </p>
           </div>
         </article>

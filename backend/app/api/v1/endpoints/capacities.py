@@ -83,5 +83,5 @@ async def save_capacities(capacities: dict):
                 "reserved_guests": 0
             })
     
-    await batch.commit()
+    batch.commit()
     return {"message": "Capacities saved successfully"}

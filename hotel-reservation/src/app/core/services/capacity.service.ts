@@ -1,7 +1,7 @@
 import { Injectable, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { tap } from 'rxjs/operators';
+import { finalize } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 import { CapacityData } from '../models/reservation.model';
 
@@ -21,7 +21,9 @@ export class CapacityService {
    */
   getAll(): Observable<CapacityData> {
     this.loadingSignal.set(true);
-    return this.http.get<CapacityData>(this.apiUrl).pipe(tap(() => this.loadingSignal.set(false)));
+    return this.http.get<CapacityData>(this.apiUrl).pipe(
+      finalize(() => this.loadingSignal.set(false))
+    );
   }
 
   /**
@@ -31,7 +33,7 @@ export class CapacityService {
     this.loadingSignal.set(true);
     return this.http
       .post<{ message: string }>(this.apiUrl, capacities)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   /**
@@ -41,6 +43,6 @@ export class CapacityService {
     this.loadingSignal.set(true);
     return this.http
       .get<any>(`${this.apiUrl}/overview`)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 }

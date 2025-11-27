@@ -22,7 +22,8 @@ import { AuthService } from '../../../core/services/auth.service';
             <a routerLink="/admin/dashboard" routerLinkActive="bg-white text-[#0f172a]" [routerLinkActiveOptions]="{ exact: true }" [class]="linkBase">Dashboard</a>
             <a routerLink="/admin/manage-capacities" routerLinkActive="bg-white text-[#0f172a]" [class]="linkBase">Manage Capacities</a>
             <a routerLink="/admin/capacity-overview" routerLinkActive="bg-white text-[#0f172a]" [class]="linkBase">Capacity Overview</a>
-            <a routerLink="/admin/reviews" routerLinkActive="bg-white text-[#0f172a]" [class]="linkBase">Reviews</a>
+<a routerLink="/admin/reviews" routerLinkActive="bg-white text-[#0f172a]" [class]="linkBase">Reviews</a>
+<a routerLink="/admin/restaurants" routerLinkActive="bg-white text-[#0f172a]" [class]="linkBase">Menus</a>
             <a routerLink="/admin/settings" routerLinkActive="bg-white text-[#0f172a]" [class]="linkBase">Settings</a>
             <a routerLink="/admin/analytics" routerLinkActive="bg-white text-[#0f172a]" [class]="linkBase">Analytics</a>
             <button (click)="handleLogout()" class="ml-2 px-3 py-2 rounded-md text-sm font-medium bg-red-500/90 hover:bg-red-500">Logout</button>

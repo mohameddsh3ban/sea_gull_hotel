@@ -83,9 +83,9 @@ async def create_reservation(
     capacity_ref = db.collection("capacities").document(capacity_key)
     new_reservation_ref = db.collection("reservations").document()
     
-    @firestore.async_transactional
-    async def create_reservation_transaction(transaction, db_client):
-        capacity_doc = await capacity_ref.get(transaction=transaction)
+    @firestore.transactional
+    def create_reservation_transaction(transaction):
+        capacity_doc = capacity_ref.get(transaction=transaction)
         
         if not capacity_doc.exists:
             # Auto-create capacity if missing (optional, based on your preference)
@@ -108,7 +108,7 @@ async def create_reservation(
         return new_reservation_ref.id
     
     try:
-        reservation_id = await create_reservation_transaction(db.transaction(), db)
+        reservation_id = create_reservation_transaction(transaction)
         
         # Queue email
         background_tasks.add_task(
@@ -159,9 +159,9 @@ async def update_reservation(
     db = get_db()
     res_ref = db.collection("reservations").document(reservation_id)
     
-    @firestore.async_transactional
-    async def update_transaction(transaction, db_client):
-        res_doc = await res_ref.get(transaction=transaction)
+    @firestore.transactional
+    def update_transaction(transaction):
+        res_doc = res_ref.get(transaction=transaction)
         if not res_doc.exists:
             raise HTTPException(status_code=404, detail="Reservation not found")
             
@@ -178,7 +178,7 @@ async def update_reservation(
             old_cap_ref = db.collection("capacities").document(f"{restaurant}_{old_date}")
             new_cap_ref = db.collection("capacities").document(f"{restaurant}_{new_date}")
             
-            new_cap_doc = await new_cap_ref.get(transaction=transaction)
+            new_cap_doc = new_cap_ref.get(transaction=transaction)
             
             if not new_cap_doc.exists:
                 # Decide policy: Fail or Auto-create? Let's fail for safety in Admin mode
@@ -205,7 +205,7 @@ async def update_reservation(
 
     try:
         # Run transaction
-        old_data = await update_transaction(db.transaction(), db)
+        old_data = update_transaction(transaction)
         
         # Merge old data with new payload for the email context
         email_data = old_data.copy()
@@ -254,7 +254,7 @@ async def list_reservations(
     # Cursor-based pagination
     if filters.last_id:
         last_doc_ref = db.collection("reservations").document(filters.last_id)
-        last_doc = await last_doc_ref.get()
+        last_doc = last_doc_ref.get()
         if last_doc.exists:
             query = query.start_after(last_doc)
     
@@ -262,7 +262,7 @@ async def list_reservations(
     query = query.limit(filters.limit)
     
     # Execute query
-    docs = [doc async for doc in query.stream()]
+    docs = list(query.stream())
     
     # In-memory search filter (if needed, as Firestore doesn't support full-text search)
     if filters.search:

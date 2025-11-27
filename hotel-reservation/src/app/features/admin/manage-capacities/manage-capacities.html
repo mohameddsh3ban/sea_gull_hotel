@@ -16,22 +16,22 @@
           }
         </tr>
       </thead>
-      <tbody>
-        @for (rest of restaurants; track rest) {
-        <tr class="border-b hover:bg-gray-50">
-          <td class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap bg-gray-50/50">
-            {{ rest }}
-          </td>
-          @for (day of days; track day) {
-          <td class="px-4 py-3 text-center">
-            <!-- We use array syntax access for dynamic keys -->
-            <input type="number" [(ngModel)]="capacities[getDateKey(rest, day)]" min="0"
-              class="w-20 text-center border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 border p-1" />
-          </td>
-          }
-        </tr>
-        }
-      </tbody>
+<tbody>
+  @for (rest of restaurantNames; track rest) {
+    <tr class="border-b hover:bg-gray-50">
+      <td class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap bg-gray-50/50">
+        {{ rest }}
+      </td>
+      @for (day of days; track day) {
+        <td class="px-4 py-3 text-center">
+          <!-- We use array syntax access for dynamic keys -->
+          <input type="number" [(ngModel)]="capacities[getDateKey(rest, day)]" min="0"
+            class="w-20 text-center border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 border p-1" />
+        </td>
+      }
+    </tr>
+  }
+</tbody>
     </table>
   </div>
 

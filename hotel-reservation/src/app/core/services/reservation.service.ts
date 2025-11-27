@@ -1,7 +1,7 @@
 import { Injectable, signal } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { tap } from 'rxjs/operators';
+import { finalize } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 import { Reservation, ReservationResponse } from '../models/reservation.model';
 
@@ -28,7 +28,7 @@ export class ReservationService {
     this.loadingSignal.set(true);
     return this.http
       .get<ReservationResponse>(`${this.apiUrl}/reservations`, { params })
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   /**
@@ -38,7 +38,7 @@ export class ReservationService {
     this.loadingSignal.set(true);
     return this.http
       .get<Reservation>(`${this.apiUrl}/${id}`)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   /**
@@ -48,7 +48,7 @@ export class ReservationService {
     this.loadingSignal.set(true);
     return this.http
       .post<Reservation>(this.apiUrl, reservation)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   /**
@@ -58,7 +58,7 @@ export class ReservationService {
     this.loadingSignal.set(true);
     return this.http
       .put<Reservation>(`${this.apiUrl}/${id}`, reservation)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   /**
@@ -68,7 +68,7 @@ export class ReservationService {
     this.loadingSignal.set(true);
     return this.http
       .delete<void>(`${this.apiUrl}/${id}`)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   /**
@@ -78,7 +78,7 @@ export class ReservationService {
     this.loadingSignal.set(true);
     return this.http
       .post<{ message: string }>(`${this.apiUrl}/cancel/${token}`, {})
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   /**
@@ -88,13 +88,13 @@ export class ReservationService {
     this.loadingSignal.set(true);
     return this.http
       .get<Reservation>(`${this.apiUrl}/reservations/token/${token}`)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 
   submitReview(payload: { token: string; rating: number; comment: string }): Observable<any> {
     this.loadingSignal.set(true);
     return this.http
       .post(`${this.apiUrl}/reviews/submit`, payload)
-      .pipe(tap(() => this.loadingSignal.set(false)));
+      .pipe(finalize(() => this.loadingSignal.set(false)));
   }
 }

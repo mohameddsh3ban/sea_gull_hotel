@@ -1,23 +1,17 @@
+import { Injectable, inject, signal, computed, Signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { AngularFireAuth } from '@angular/fire/compat/auth';
-import { Observable, from, of, throwError, timer, BehaviorSubject } from 'rxjs';
-import { environment } from '../../../environments/environment';
-// Remove RequestHandlerService from imports if not used elsewhere, or keep if used for register
-import { catchError, filter, finalize, map, switchMap, take, tap } from 'rxjs/operators';
+import { Observable, from, BehaviorSubject, of, throwError } from 'rxjs';
+import { switchMap, tap, map, catchError, finalize } from 'rxjs/operators';
 import { LoginDto } from '../models/dto/login.dto';
-import { IRegisterPayload } from '../models/dto/register.dto';
 import { NotificationService } from './notification.service';
-import { RequestHandlerService } from './request-handler.service';
-import { HttpClient } from '@angular/common/http';
-import { computed, inject, Injectable, Signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { UserService } from './user.service';
 
 export interface IAuthUser {
   uid: string;
   email: string | null;
   name: string | null;
-  role?: string;
+  role: string; // Made required
   photoUrl?: string;
 }
 
@@ -28,104 +22,107 @@ export class AuthService {
   private afAuth = inject(AngularFireAuth);
   private router = inject(Router);
   private notificationService = inject(NotificationService);
-  private requestHandler = inject(RequestHandlerService);
-  private userService = inject(UserService);
-  
-  // ... (Keep Subjects and Signals as they were) ...
+
+  // BehaviorSubject to manage state imperatively
   private currentUserSubject = new BehaviorSubject<IAuthUser | null>(null);
-  public readonly user$ = this.currentUserSubject.asObservable();
   
+  // Expose as Observable and Signal
+  public readonly user$ = this.currentUserSubject.asObservable();
+  public readonly user = toSignal(this.user$, { initialValue: null });
+  
+  // Loading state for initial auth check
   private isLoadingSubject = new BehaviorSubject<boolean>(true);
   public readonly isLoading$ = this.isLoadingSubject.asObservable();
 
-  private _loginLoadingSubject = new BehaviorSubject<boolean>(false);
-  public readonly loginLoading$ = this._loginLoadingSubject.asObservable();
-
-  public readonly user: Signal<IAuthUser | null>;
-  public readonly isAuthenticated: Signal<boolean>;
+  // Computeds
+  public readonly isAuthenticated = computed(() => !!this.user());
+  public readonly isAdmin = computed(() => this.user()?.role === 'admin');
 
   constructor() {
-    this.user = toSignal(this.user$, { initialValue: null });
-    this.isAuthenticated = computed(() => !!this.user());
-
-    // Subscribe to Firebase Auth State
+    // 1. Listen to Firebase Auth State (Handles Page Refresh)
     this.afAuth.authState.pipe(
       switchMap(async (firebaseUser) => {
-        if (firebaseUser) {
-          // Get the ID Token Result to find the Custom Claim 'role'
-          const tokenResult = await firebaseUser.getIdTokenResult();
-          const role = (tokenResult.claims['role'] as string) || 'guest';
-          
-          const user: IAuthUser = {
-            uid: firebaseUser.uid,
-            email: firebaseUser.email,
-            name: firebaseUser.displayName,
-            photoUrl: firebaseUser.photoURL || undefined,
-            role: role, // ✅ Actually get the role from Firebase
-          };
-          return user;
-        } else {
-          return null;
-        }
+        if (!firebaseUser) return null;
+
+        // Force refresh token to ensure we get latest Custom Claims (Roles)
+        const tokenResult = await firebaseUser.getIdTokenResult(true);
+        const role = (tokenResult.claims['role'] as string) || 'guest';
+
+        return {
+          uid: firebaseUser.uid,
+          email: firebaseUser.email,
+          name: firebaseUser.displayName,
+          photoUrl: firebaseUser.photoURL || undefined,
+          role: role,
+        } as IAuthUser;
       })
-    ).subscribe((user) => {
-      console.log('Auth State Changed:', user?.email || 'Logged Out', 'Role:', user?.role);
-      this.currentUserSubject.next(user);
-      this.isLoadingSubject.next(false);
+    ).subscribe({
+      next: (user) => {
+        this.currentUserSubject.next(user);
+        this.isLoadingSubject.next(false);
+      },
+      error: (err) => {
+        console.error('Auth State Error', err);
+        this.isLoadingSubject.next(false);
+      }
     });
-    
-    // ... (Keep session check timer) ...
   }
 
-  // ... (Keep waitForAuthReady) ...
-
-  // ✅ REFACTORED LOGIN
-  // We no longer call the backend here. We just sign in with Firebase.
-  // The authState subscription above handles setting the user state.
-  login(credentials: LoginDto): Observable<any> {
-    this._loginLoadingSubject.next(true);
-
+  /**
+   * Login with Email/Password
+   * Returns the mapped User object so the component can redirect immediately.
+   */
+  login(credentials: LoginDto): Observable<IAuthUser> {
     return from(
       this.afAuth.signInWithEmailAndPassword(credentials.email, credentials.password)
     ).pipe(
-      tap(() => {
-        this.notificationService.showSuccess('Welcome Back!', 'You have successfully logged in.');
+      // Wait for the User Credential, then fetch the Token Result immediately
+      switchMap(async (userCredential) => {
+        if (!userCredential.user) throw new Error('No user found');
+        
+        // Force token refresh to get fresh claims
+        const tokenResult = await userCredential.user.getIdTokenResult(true);
+        const role = (tokenResult.claims['role'] as string) || 'guest';
+        
+        return {
+          uid: userCredential.user.uid,
+          email: userCredential.user.email,
+          name: userCredential.user.displayName,
+          photoUrl: userCredential.user.photoURL,
+          role: role
+        } as IAuthUser;
+      }),
+      tap((user) => {
+        // Update state immediately (don't wait for authState listener)
+        this.currentUserSubject.next(user);
+        this.notificationService.showSuccess('Welcome Back!', `Logged in as ${user.role}`);
       }),
       catchError((err) => {
-        console.error(err);
-        // Map Firebase errors to user-friendly messages
-        let msg = 'Login failed';
-        if (err.code === 'auth/user-not-found') msg = 'User not found';
-        if (err.code === 'auth/wrong-password') msg = 'Invalid password';
-        if (err.code === 'auth/invalid-credential') msg = 'Invalid credentials';
-        return throwError(() => new Error(msg));
-      }),
-      finalize(() => {
-        this._loginLoadingSubject.next(false);
+        return throwError(() => this.handleFirebaseError(err));
       })
     );
   }
 
   logout() {
-    this._loginLoadingSubject.next(true);
-    // Just sign out of Firebase. No need to tell backend unless you do server-side session cookies.
-    this.afAuth.signOut().then(() => {
-      this._loginLoadingSubject.next(false);
-      this.router.navigate(['/auth/login']);
-      this.notificationService.showSuccess('Logged Out', 'You have been successfully logged out.');
-    });
+    return from(this.afAuth.signOut()).pipe(
+      tap(() => {
+        this.currentUserSubject.next(null);
+        this.router.navigate(['/auth/login']);
+        this.notificationService.showSuccess('Logged Out', 'See you soon!');
+      })
+    );
   }
 
-  // ... (Keep register and other methods) ...
-  
-  register(payload: IRegisterPayload): Observable<any> {
-    // Registration might still need to go to backend to set custom claims (roles)
-    // OR verify the user exists in your SQL/Mongo DB. 
-    // Keep this as is if your backend handles user creation logic.
-    return this.requestHandler
-      .requestBuilder('POST', 'auth/register') // Ensure this endpoint exists in backend!
-      .withoutAuth()
-      .setBody(payload)
-      .execute();
+  private handleFirebaseError(err: any): Error {
+    console.error(err);
+    let msg = 'An unknown error occurred';
+    if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
+      msg = 'Invalid email or password';
+    } else if (err.code === 'auth/too-many-requests') {
+      msg = 'Too many failed attempts. Please try again later.';
+    } else if (err.code === 'auth/user-disabled') {
+      msg = 'This account has been disabled.';
+    }
+    return new Error(msg);
   }
 }

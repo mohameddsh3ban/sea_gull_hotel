@@ -1,28 +1,34 @@
 import { inject } from '@angular/core';
 import { CanActivateFn, Router } from '@angular/router';
 import { AuthService } from '../services/auth.service';
-import { map, take, filter, switchMap } from 'rxjs/operators';
+import { map, filter, take } from 'rxjs/operators';
 
-export function roleGuard(allowedRoles: Array<'student' | 'teacher' | 'admin' | 'reception' | 'kitchen' | 'accounting'>): CanActivateFn {
+export function roleGuard(allowedRoles: string[]): CanActivateFn {
   return () => {
     const authService = inject(AuthService);
     const router = inject(Router);
 
     return authService.isLoading$.pipe(
-      filter(loading => !loading),
+      // 1. Wait for Firebase to initialize (on page refresh)
+      filter(isLoading => !isLoading),
       take(1),
-      switchMap(() => authService.user$),
-      take(1),
-      map(currentUser => {
-        if (!currentUser || !allowedRoles.includes(currentUser.role as 'student' | 'teacher' | 'admin' | 'reception' | 'kitchen' | 'accounting')) {
-          console.warn(`Role guard: Access denied.`);
-          // If user is missing (logged out), let AuthGuard handle the redirect usually,
-          // but if we are here, redirect to login or appropriate dashboard
-          if(!currentUser) return router.parseUrl('/auth/login');
-          // Assuming role specific dashboards exist like /admin, /reception etc.
-          return router.parseUrl(`/${currentUser.role}`);
+      // 2. Check User State
+      map(() => {
+        const user = authService.user();
+        
+        // Not logged in?
+        if (!user) {
+          return router.createUrlTree(['/login']);
         }
-        return true;
+
+        // Check Role
+        if (allowedRoles.includes(user.role)) {
+          return true;
+        }
+
+        // Logged in but wrong role?
+        console.warn(`Access Denied: User role '${user.role}' not in [${allowedRoles}]`);
+        return router.createUrlTree(['/login']); // Redirect to login as requested
       })
     );
   };

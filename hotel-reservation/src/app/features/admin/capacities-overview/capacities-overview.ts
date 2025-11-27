@@ -1,6 +1,7 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { CapacityService } from '../../../core/services/capacity.service';
+import { RestaurantService } from '../../../core/services/restaurant.service'; // Import
 import { LoadingSpinner } from '../../../shared/components/loading-spinner/loading-spinner';
 
 @Component({
@@ -13,19 +14,26 @@ export class CapacitiesOverview implements OnInit {
   loading = signal(true);
   overviewData: any[] = [];
   
-  restaurants = ['Oriental', 'Chinese', 'Italian', 'Indian'];
+  restaurantNames: string[] = []; // Dynamic
   days = [0, 1, 2, 3, 4, 5];
   today = new Date();
 
-  constructor(private capacityService: CapacityService) {}
+  constructor(
+    private capacityService: CapacityService,
+    private restaurantService: RestaurantService // Inject
+  ) {}
 
   ngOnInit() {
-    this.capacityService.getOverview().subscribe({
-      next: (data: any) => {
-        this.overviewData = Array.isArray(data) ? data : [];
-        this.loading.set(false);
-      },
-      error: () => this.loading.set(false)
+    this.restaurantService.getAll().subscribe(rests => {
+        this.restaurantNames = rests.map(r => r.id);
+        
+        this.capacityService.getOverview().subscribe({
+          next: (data: any) => {
+            this.overviewData = Array.isArray(data) ? data : [];
+            this.loading.set(false);
+          },
+          error: () => this.loading.set(false)
+        });
     });
   }
 

@@ -1,29 +1,39 @@
-import { HttpInterceptorFn } from '@angular/common/http';
+// =================================================================================
+// File: hotel-reservation/src/app/core/interceptors/auth.interceptor.ts
+// =================================================================================
+
+import { HttpInterceptorFn, HttpErrorResponse } from '@angular/common/http';
 import { inject } from '@angular/core';
-import { Auth } from '@angular/fire/auth';
-import { from, switchMap } from 'rxjs';
+import { AngularFireAuth } from '@angular/fire/compat/auth';
+import { throwError, from } from 'rxjs';
+import { switchMap, catchError, take } from 'rxjs/operators';
 
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
-  const auth = inject(Auth);
+  const afAuth = inject(AngularFireAuth);
 
-  // Skip auth for certain URLs (like public endpoints)
+  // Skip assets, i18n, and external URLs to prevent circular dependency or unnecessary checks
   if (req.url.includes('/assets/') || req.url.includes('i18n')) {
     return next(req);
   }
 
-  // Get the current user's ID token
-  return from(auth.currentUser?.getIdToken() ?? Promise.resolve(null)).pipe(
+  // FIX: Use idToken observable (stream) instead of currentUser promise.
+  // The Promise method often hangs indefinitely on page reload.
+  return afAuth.idToken.pipe(
+    take(1), // Take the first value (token or null) and complete immediately
     switchMap((token) => {
       if (token) {
-        // Clone the request and add the Authorization header
-        const cloned = req.clone({
-          setHeaders: {
-            Authorization: `Bearer ${token}`,
-          },
+        req = req.clone({
+          setHeaders: { Authorization: `Bearer ${token}` },
         });
-        return next(cloned);
       }
       return next(req);
+    }),
+    catchError((error: HttpErrorResponse) => {
+      // Handle Global Auth Errors (401/403)
+      if (error.status === 401 || error.status === 403) {
+        console.warn('Unauthorized request:', error.url);
+      }
+      return throwError(() => error);
     })
   );
 };
